@@ -12,6 +12,7 @@ import (
 // Config is the unified configuration passed throughout the application.
 // Created by merging AdapterConfig (deployment) and AdapterTaskConfig (task).
 type Config struct {
+	SchemaVersion string                         `yaml:"schema_version,omitempty"`
 	Transports    map[string]TransportDefinition `yaml:"transports,omitempty"`
 	Stores        map[string]StoreDefinition     `yaml:"stores,omitempty"`
 	Post          *PostConfig                    `yaml:"post,omitempty"`
@@ -33,6 +34,7 @@ func Merge(adapterCfg *AdapterConfig, taskCfg *AdapterTaskConfig) *Config {
 	}
 
 	return &Config{
+		SchemaVersion: taskCfg.SchemaVersion,
 		Adapter:       adapterCfg.Adapter,
 		Clients:       adapterCfg.Clients,
 		Transports:    adapterCfg.Transports,
@@ -495,42 +497,16 @@ func (c *Condition) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	return nil
 }
 
-// TransportConfig specifies which transport client to use for a resource
-type TransportConfig struct {
-	// Maestro contains maestro-specific transport settings (required when Client is "maestro")
-	Maestro *MaestroTransportConfig `yaml:"maestro,omitempty"`
-	// Desire contains desire-specific transport settings (required for desire transports).
-	Desire *DesireTransportConfig `yaml:"desire,omitempty"`
-	// Client is the configured transport client name.
-	Client string `yaml:"client" validate:"required"`
-}
-
-// MaestroTransportConfig contains maestro-specific transport settings
-type MaestroTransportConfig struct {
-	// TargetCluster is the name of the target cluster (consumer) for ManifestWork delivery
-	TargetCluster string `yaml:"target_cluster" validate:"required"`
-}
-
-// DesireTransportConfig contains routing settings for Desire delivery.
-type DesireTransportConfig struct {
-	// TargetCluster identifies the target managed cluster and may be a Go template.
-	TargetCluster string `yaml:"target_cluster" validate:"required"`
-	// Resource is the plural Kubernetes resource type used in Desire identities.
-	Resource string `yaml:"resource" validate:"required"`
-}
-
 // Resource represents a resource configuration.
-// The manifest field holds either a K8s resource (for kubernetes transport)
-// or a ManifestWork (for maestro transport). The transport client determines
-// how to parse and apply it.
+// Transport names a deployment transport; omission selects local Kubernetes.
+// Manifest holds the Kubernetes resource delivered through that transport.
 type Resource struct {
-	Name      string           `yaml:"name" validate:"required,resourcename"`
-	Transport *TransportConfig `yaml:"transport,omitempty"`
+	Name string `yaml:"name" validate:"required,resourcename"`
+	// Transport references a named deployment route; omission uses local Kubernetes.
+	Transport *string          `yaml:"transport,omitempty"`
 	Manifest  interface{}      `yaml:"manifest,omitempty"`
 	Discovery *DiscoveryConfig `yaml:"discovery,omitempty" validate:"required"`
-	// NestedDiscoveries defines how to discover individual sub-resources
-	// within the applied manifest. For example, discovering resources
-	// inside a ManifestWork's workload.
+	// NestedDiscoveries defines how to discover sub-resources of the applied resource.
 	// Lifecycle defines the resource lifecycle behavior, including deletion triggers and policy.
 	// If not set, the resource uses the default apply-only behavior.
 	Lifecycle         *ResourceLifecycle `yaml:"lifecycle,omitempty"`
@@ -549,7 +525,6 @@ type LifecycleDelete struct {
 	// When defines the CEL expression that determines when to delete the resource.
 	When *LifecycleWhen `yaml:"when,omitempty"`
 	// PropagationPolicy is the Kubernetes deletion propagation policy: Background (default), Foreground, Orphan.
-	// For Maestro transport, this is ignored — ManifestWork handles its own cleanup semantics.
 	PropagationPolicy string `yaml:"propagationPolicy,omitempty"`
 }
 
@@ -694,11 +669,14 @@ type AdapterConfig struct {
 	DebugConfig bool                           `yaml:"debug_config,omitempty" mapstructure:"debug_config"`
 }
 
-// TransportDefinition is a named deployment transport entry. It is distinct
-// from TransportConfig, which belongs to the task resource DSL.
+// TransportDefinition is a named deployment transport entry.
 type TransportDefinition struct {
-	Type  string `yaml:"type" mapstructure:"type"`
-	Store string `yaml:"store,omitempty" mapstructure:"store"`
+	// ResourcePlurals maps static apiVersion/Kind keys to API resource plurals for remote routing.
+	ResourcePlurals map[string]string `yaml:"resource_plurals,omitempty" mapstructure:"resource_plurals"`
+	Type            string            `yaml:"type" mapstructure:"type"`
+	Store           string            `yaml:"store,omitempty" mapstructure:"store"`
+	// TargetCluster may be a template of task parameters and precondition captures.
+	TargetCluster string `yaml:"target_cluster,omitempty" mapstructure:"target_cluster"`
 }
 
 // StoreDefinition is a named deployment store entry used by remote transports.
@@ -719,7 +697,7 @@ func NormalizeRegistryName(name string) string {
 // TransportDefinitionByName returns the declared transport definition for name,
 // matching the name case-insensitively the same way NormalizeRegistryName
 // matches store references. Task configs reference transports by a value
-// (resource.transport.client) that Viper does not lowercase, so a mixed-case
+// (resource.transport) that Viper does not lowercase, so a mixed-case
 // reference must resolve to the declared transport instead of failing as an
 // unknown transport. The bool is false when no transport is declared under name.
 func TransportDefinitionByName(
@@ -736,6 +714,13 @@ func TransportDefinitionByName(
 		}
 	}
 	return TransportDefinition{}, false
+}
+
+// TransportClaimsReservedKubernetesName reports whether a transport declared
+// under name illegitimately claims the "kubernetes" name reserved for the
+// implicit local Kubernetes transport.
+func TransportClaimsReservedKubernetesName(name string, definition TransportDefinition) bool {
+	return NormalizeRegistryName(name) == TransportClientKubernetes && definition.Type != TransportTypeKubernetes
 }
 
 // ClientsConfig contains configuration for all external clients
@@ -786,6 +771,8 @@ type KeepaliveConfig struct {
 // Contains params, preconditions, resources, and post-processing actions.
 // This config is loaded from YAML without environment variable overrides.
 type AdapterTaskConfig struct {
+	// SchemaVersion is consumed by the version gate delivered with HYPERFLEET-1443.
+	SchemaVersion string         `yaml:"schema_version,omitempty"`
 	Post          *PostConfig    `yaml:"post,omitempty" validate:"omitempty"`
 	Params        []Parameter    `yaml:"params,omitempty" validate:"dive"`
 	Preconditions []Precondition `yaml:"preconditions,omitempty" validate:"dive"`

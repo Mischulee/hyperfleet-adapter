@@ -22,10 +22,10 @@ type TransportContext struct {
 	// store's partition key. Required for all operations.
 	ManagementCluster string
 	// Resource is the plural Kubernetes resource type (e.g. "networkpolicies"),
-	// declared in the task config alongside the manifest. The desire store's
+	// declared on the named remote transport for the manifest's GVK. The desire store's
 	// Identity is keyed by this plural form directly (see
-	// pkg/desire.Identity.Resource in hyperfleet-applier); the adapter never
-	// derives it from the manifest's Kind — no RESTMapper is used or needed.
+	// pkg/desire.Identity.Resource in hyperfleet-applier). The adapter selects
+	// it from the route's GVK map instead of guessing from Kind or using a RESTMapper.
 	// Required for all operations.
 	Resource string
 }

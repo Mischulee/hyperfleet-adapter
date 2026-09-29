@@ -8,6 +8,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func expectedRemoteDefinition(store string) TransportDefinition {
+	return TransportDefinition{
+		Type: TransportTypeRemote, Store: store, TargetCluster: "cluster-1",
+		ResourcePlurals: map[string]string{"v1/configmap": "configmaps"},
+	}
+}
+
 func TestLoadConfigCopiesNamedTransportAndStoreDefinitions(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -26,9 +33,15 @@ stores:
 transports:
   remote-primary:
     type: remote
+    target_cluster: cluster-1
+    resource_plurals:
+      "v1/ConfigMap": configmaps
     store: desired-memory
   remote-secondary:
     type: remote
+    target_cluster: cluster-1
+    resource_plurals:
+      "v1/ConfigMap": configmaps
     store: desired-memory
 `, `{}`)
 
@@ -45,12 +58,12 @@ transports:
 	assert.Len(t, config.Transports, 2)
 	assert.Equal(
 		t,
-		TransportDefinition{Type: TransportTypeRemote, Store: "desired-memory"},
+		expectedRemoteDefinition("desired-memory"),
 		config.Transports["remote-primary"],
 	)
 	assert.Equal(
 		t,
-		TransportDefinition{Type: TransportTypeRemote, Store: "desired-memory"},
+		expectedRemoteDefinition("desired-memory"),
 		config.Transports["remote-secondary"],
 	)
 }
@@ -68,6 +81,9 @@ stores:
 transports:
   remote-primary:
     type: remote
+    target_cluster: cluster-1
+    resource_plurals:
+      "v1/ConfigMap": configmaps
     store: Desired-Memory
 `, `{}`)
 
@@ -84,7 +100,7 @@ transports:
 	assert.Equal(t, StoreDefinition{Type: StoreTypeMemory}, config.Stores["desired-memory"])
 	assert.Equal(
 		t,
-		TransportDefinition{Type: TransportTypeRemote, Store: "Desired-Memory"},
+		expectedRemoteDefinition("Desired-Memory"),
 		config.Transports["remote-primary"],
 	)
 }
@@ -144,6 +160,9 @@ adapter:
 transports:
   remote:
     type: remote
+    target_cluster: cluster-1
+    resource_plurals:
+      "v1/ConfigMap": configmaps
 `,
 			errorMsg: "transports.remote.store is required for remote transport",
 		},
@@ -155,6 +174,9 @@ adapter:
 transports:
   remote:
     type: remote
+    target_cluster: cluster-1
+    resource_plurals:
+      "v1/ConfigMap": configmaps
     store: missing
 `,
 			errorMsg: `transports.remote.store references unknown store "missing"`,
@@ -269,7 +291,10 @@ func TestAdapterConfigValidationRequiresTLSForRedisCredentials(t *testing.T) {
 					"desired": {Type: StoreTypeRedis, URL: tt.redisURL},
 				},
 				Transports: map[string]TransportDefinition{
-					"remote": {Type: TransportTypeRemote, Store: "desired"},
+					"remote": {
+						Type: TransportTypeRemote, Store: "desired", TargetCluster: "cluster-1",
+						ResourcePlurals: map[string]string{"v1/ConfigMap": "configmaps"},
+					},
 				},
 			}
 
@@ -318,6 +343,9 @@ stores:
 transports:
   remote-primary:
     type: remote
+    target_cluster: cluster-1
+    resource_plurals:
+      "v1/ConfigMap": configmaps
     store: desired-memory
 `, `{}`)
 
@@ -363,9 +391,15 @@ stores:
 transports:
   Remote-Primary:
     type: remote
+    target_cluster: cluster-1
+    resource_plurals:
+      "v1/ConfigMap": configmaps
     store: desired-memory
   remote-primary:
     type: remote
+    target_cluster: cluster-1
+    resource_plurals:
+      "v1/ConfigMap": configmaps
     store: desired-memory
 `, `{}`)
 

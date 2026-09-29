@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -35,146 +36,43 @@ const (
 )
 
 func TestResourceExecutor_ResolveTransport(t *testing.T) {
-	remoteClient := k8sclient.NewMockK8sClient()
-	kubernetesClient := k8sclient.NewMockK8sClient()
-	namedKubernetesClient := k8sclient.NewMockK8sClient()
+	remote := k8sclient.NewMockK8sClient()
+	local := k8sclient.NewMockK8sClient()
+	definition := testRemoteDefinition()
+	definition.TargetCluster = "{{ .clusterName }}"
 	re := newResourceExecutor(&ExecutorConfig{
 		Config: &configloader.Config{Transports: map[string]configloader.TransportDefinition{
-			"remote-primary":     {Type: configloader.TransportTypeRemote},
-			"kubernetes-primary": {Type: configloader.TransportTypeKubernetes},
+			"remote-primary": definition,
 		}},
-		TransportRegistry: transportclient.Registry{
-			"remote-primary":                       remoteClient,
-			"kubernetes-primary":                   namedKubernetesClient,
-			configloader.TransportClientKubernetes: kubernetesClient,
-		},
+		TransportRegistry: transportclient.Registry{"remote-primary": remote, configloader.TransportClientKubernetes: local},
 	})
-	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx := NewExecutionContext(t.Context(), nil, nil)
 	execCtx.Params["clusterName"] = "cluster-1"
+	resource := namedRemoteResource(&configloader.DiscoveryConfig{ByName: "test-config"})
+	resource.Transport = new("Remote-Primary")
+	client, target, err := re.resolveTransport(resource, execCtx)
+	require.NoError(t, err)
+	assert.Same(t, remote, client)
+	assert.Equal(t, &desireclient.TransportContext{ManagementCluster: "cluster-1", Resource: "configmaps"}, target)
 
-	tests := []struct {
-		resource       *configloader.Resource
-		wantClient     transportclient.TransportClient
-		wantTarget     transportclient.TransportContext
-		name           string
-		wantErrContain string
-	}{
-		{
-			name:       "uses Kubernetes by default",
-			resource:   &configloader.Resource{},
-			wantClient: kubernetesClient,
-		},
-		{
-			name: "uses named Kubernetes transport without context",
-			resource: &configloader.Resource{Transport: &configloader.TransportConfig{
-				Client: "kubernetes-primary",
-			}},
-			wantClient: namedKubernetesClient,
-		},
-		{
-			name: "builds Desire context for named remote transport",
-			resource: &configloader.Resource{Transport: &configloader.TransportConfig{
-				Client: "remote-primary",
-				Desire: &configloader.DesireTransportConfig{
-					TargetCluster: "{{ .clusterName }}",
-					Resource:      "nodepools",
-				},
-			}},
-			wantClient: remoteClient,
-			wantTarget: &desireclient.TransportContext{
-				ManagementCluster: "cluster-1",
-				Resource:          "nodepools",
-			},
-		},
-		{
-			name: "resolves mixed-case transport reference",
-			resource: &configloader.Resource{Transport: &configloader.TransportConfig{
-				Client: "Remote-Primary",
-				Desire: &configloader.DesireTransportConfig{
-					TargetCluster: "{{ .clusterName }}",
-					Resource:      "nodepools",
-				},
-			}},
-			wantClient: remoteClient,
-			wantTarget: &desireclient.TransportContext{
-				ManagementCluster: "cluster-1",
-				Resource:          "nodepools",
-			},
-		},
-		{
-			name: "rejects unknown transport",
-			resource: &configloader.Resource{Transport: &configloader.TransportConfig{
-				Client: "missing-transport",
-			}},
-			wantErrContain: `transport client "missing-transport" not configured`,
-		},
-		{
-			name: "rejects remote transport without Desire configuration",
-			resource: &configloader.Resource{Transport: &configloader.TransportConfig{
-				Client: "remote-primary",
-			}},
-			wantErrContain: `desire transport config is required for "remote-primary"`,
-		},
-		{
-			name: "rejects invalid Desire target cluster template",
-			resource: &configloader.Resource{Transport: &configloader.TransportConfig{
-				Client: "remote-primary",
-				Desire: &configloader.DesireTransportConfig{
-					TargetCluster: "{{ .missing }}",
-					Resource:      "nodepools",
-				},
-			}},
-			wantErrContain: "render desire target cluster",
-		},
-		{
-			name: "rejects Desire transport without resource type",
-			resource: &configloader.Resource{Transport: &configloader.TransportConfig{
-				Client: "remote-primary",
-				Desire: &configloader.DesireTransportConfig{
-					TargetCluster: "cluster-1",
-				},
-			}},
-			wantErrContain: `desire resource is required for "remote-primary"`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			client, target, err := re.resolveTransport(*tt.resource, execCtx)
-
-			if tt.wantErrContain != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.wantErrContain)
-				return
-			}
-			require.NoError(t, err)
-			assert.Same(t, tt.wantClient, client)
-			assert.Equal(t, tt.wantTarget, target)
-		})
-	}
-}
-
-func TestResourceExecutor_ResolveTransport_RejectsCustomMaestroName(t *testing.T) {
-	re := newResourceExecutor(&ExecutorConfig{
-		Config: &configloader.Config{Transports: map[string]configloader.TransportDefinition{
-			configloader.TransportClientMaestro: {Type: configloader.TransportTypeRemote},
-		}},
-	})
-
-	client, target, err := re.resolveTransport(configloader.Resource{
-		Transport: &configloader.TransportConfig{
-			Client: configloader.TransportClientMaestro,
-			Desire: &configloader.DesireTransportConfig{
-				TargetCluster: "cluster-1",
-				Resource:      "nodepools",
-			},
-		},
-	}, NewExecutionContext(context.Background(), nil, nil))
-
-	require.Error(t, err)
-	assert.ErrorContains(t, err, `transport name "maestro" is reserved for the built-in maestro transport`)
-	assert.Nil(t, client)
+	resource.Transport = nil
+	client, target, err = re.resolveTransport(resource, execCtx)
+	require.NoError(t, err)
+	assert.Same(t, local, client)
 	assert.Nil(t, target)
+
+	resource.Transport = new("remote-primary")
+	definition.TargetCluster = "{{ .missing }}"
+	re.config.Transports["remote-primary"] = definition
+	_, _, err = re.resolveTransport(resource, execCtx)
+	require.ErrorContains(t, err, "target_cluster")
+	definition.TargetCluster = "{{ .clusterName }}"
+	re.config.Transports["remote-primary"] = definition
+	for _, invalid := range []string{"", "Bad_Cluster"} {
+		execCtx.Params["clusterName"] = invalid
+		_, _, err = re.resolveTransport(resource, execCtx)
+		require.ErrorContains(t, err, "must be a Kubernetes DNS-1123 label")
+	}
 }
 
 func TestResourceExecutor_ExecuteAll_UnknownTransport(t *testing.T) {
@@ -182,10 +80,8 @@ func TestResourceExecutor_ExecuteAll_UnknownTransport(t *testing.T) {
 		TransportRegistry: testTransportRegistry(k8sclient.NewMockK8sClient()),
 	})
 	resource := configloader.Resource{
-		Name: "test-resource",
-		Transport: &configloader.TransportConfig{
-			Client: "missing-transport",
-		},
+		Name:      "test-resource",
+		Transport: new("missing-transport"),
 	}
 
 	_, err := re.ExecuteAll(
@@ -201,7 +97,7 @@ func TestResourceExecutor_ExecuteAll_UnknownTransport(t *testing.T) {
 func newNamedRemoteResourceExecutor(remote, fallback transportclient.TransportClient) *ResourceExecutor {
 	return newResourceExecutor(&ExecutorConfig{
 		Config: &configloader.Config{Transports: map[string]configloader.TransportDefinition{
-			"remote-primary": {Type: configloader.TransportTypeRemote},
+			"remote-primary": testRemoteDefinition(),
 		}},
 		TransportRegistry: transportclient.Registry{
 			"remote-primary":                       remote,
@@ -212,14 +108,8 @@ func newNamedRemoteResourceExecutor(remote, fallback transportclient.TransportCl
 
 func namedRemoteResource(discovery *configloader.DiscoveryConfig) configloader.Resource {
 	return configloader.Resource{
-		Name: "test-resource",
-		Transport: &configloader.TransportConfig{
-			Client: "remote-primary",
-			Desire: &configloader.DesireTransportConfig{
-				TargetCluster: "cluster-1",
-				Resource:      "configmaps",
-			},
-		},
+		Name:      "test-resource",
+		Transport: new("remote-primary"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -230,6 +120,21 @@ func namedRemoteResource(discovery *configloader.DiscoveryConfig) configloader.R
 		},
 		Discovery: discovery,
 	}
+}
+
+func TestResourceExecutor_RejectsRenderedGVKThatDiffersFromStaticGVK(t *testing.T) {
+	remote := k8sclient.NewMockK8sClient()
+	resource := namedRemoteResource(nil)
+	resource.Manifest = "apiVersion: v1\n{{ if .withKind }}\nkind: ConfigMap\n{{ end }}\n" +
+		"metadata:\n  name: test-config\n  namespace: default\n"
+	execCtx := NewExecutionContext(t.Context(), nil, nil)
+	execCtx.Params["withKind"] = false
+
+	_, err := newNamedRemoteResourceExecutor(remote, k8sclient.NewMockK8sClient()).ExecuteAll(
+		t.Context(), []configloader.Resource{resource}, execCtx)
+
+	require.ErrorContains(t, err, `does not match static GVK "/v1, Kind=ConfigMap"`)
+	assert.Empty(t, remote.Resources, "a manifest with a changed GVK must not be applied")
 }
 
 func TestResourceExecutor_NamedRemoteTransportRoutesLifecycleOperations(t *testing.T) {
@@ -318,6 +223,84 @@ func TestResourceExecutor_NamedRemoteTransportRoutesLifecycleOperations(t *testi
 	})
 }
 
+type routeCall struct {
+	method, kind, plural, cluster string
+}
+
+type routeRecordingClient struct {
+	*k8sclient.MockK8sClient
+	calls []routeCall
+}
+
+func (c *routeRecordingClient) record(method, kind string, target transportclient.TransportContext) {
+	route := target.(*desireclient.TransportContext)
+	c.calls = append(c.calls, routeCall{method, kind, route.Resource, route.ManagementCluster})
+}
+
+func (c *routeRecordingClient) GetResource(ctx context.Context, gvk schema.GroupVersionKind,
+	namespace, name string, target transportclient.TransportContext,
+) (*unstructured.Unstructured, error) {
+	c.record("get", gvk.Kind, target)
+	return c.MockK8sClient.GetResource(ctx, gvk, namespace, name, target)
+}
+
+func (c *routeRecordingClient) ApplyResource(ctx context.Context, data []byte,
+	opts *transportclient.ApplyOptions, target transportclient.TransportContext,
+) (*transportclient.ApplyResult, error) {
+	var obj struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return nil, err
+	}
+	c.record("apply", obj.Kind, target)
+	return c.MockK8sClient.ApplyResource(ctx, data, opts, target)
+}
+
+func (c *routeRecordingClient) DeleteResource(ctx context.Context, gvk schema.GroupVersionKind,
+	namespace, name string, opts *transportclient.DeleteOptions, target transportclient.TransportContext,
+) error {
+	c.record("delete", gvk.Kind, target)
+	return c.MockK8sClient.DeleteResource(ctx, gvk, namespace, name, opts, target)
+}
+
+func TestResourceExecutor_OneRemoteRouteMapsTwoKindsAcrossLifecycle(t *testing.T) {
+	client := &routeRecordingClient{MockK8sClient: k8sclient.NewMockK8sClient()}
+	re := newResourceExecutor(&ExecutorConfig{
+		Config: &configloader.Config{Transports: map[string]configloader.TransportDefinition{
+			"remote-primary": testRemoteDefinition(),
+		}},
+		TransportRegistry: transportclient.Registry{"remote-primary": client},
+	})
+	configMap := namedRemoteResource(&configloader.DiscoveryConfig{Namespace: "default", ByName: "test-config"})
+	configMap.Lifecycle = &configloader.ResourceLifecycle{Create: &configloader.LifecycleCreate{
+		When: &configloader.LifecycleWhen{Expression: "true"},
+	}}
+	namespace := configloader.Resource{
+		Name: "namespace", Transport: new("remote-primary"),
+		Manifest:  map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": "test-ns"}},
+		Discovery: &configloader.DiscoveryConfig{ByName: "test-ns"},
+		Lifecycle: &configloader.ResourceLifecycle{Create: &configloader.LifecycleCreate{
+			When: &configloader.LifecycleWhen{Expression: "true"},
+		}},
+	}
+	resources := []configloader.Resource{configMap, namespace}
+	_, err := re.ExecuteAll(t.Context(), resources, NewExecutionContext(t.Context(), nil, nil))
+	require.NoError(t, err)
+	for i := range resources {
+		resources[i].Lifecycle = &configloader.ResourceLifecycle{Delete: &configloader.LifecycleDelete{
+			When: &configloader.LifecycleWhen{Expression: "true"},
+		}}
+	}
+	_, err = re.ExecuteAll(t.Context(), resources, NewExecutionContext(t.Context(), nil, nil))
+	require.NoError(t, err)
+	for _, kind := range []struct{ name, plural string }{{"ConfigMap", "configmaps"}, {"Namespace", "namespaces"}} {
+		for _, method := range []string{"get", "apply", "delete"} {
+			assert.Contains(t, client.calls, routeCall{method, kind.name, kind.plural, "cluster-1"})
+		}
+	}
+}
+
 func TestResourceExecutor_DesireTransport_DeletedPrerequisiteBeforeDependent(t *testing.T) {
 	ctx := t.Context()
 	store := memory.New()
@@ -329,7 +312,7 @@ func TestResourceExecutor_DesireTransport_DeletedPrerequisiteBeforeDependent(t *
 	}}
 	re := newResourceExecutor(&ExecutorConfig{
 		Config: &configloader.Config{Transports: map[string]configloader.TransportDefinition{
-			desireTransportName: {Type: configloader.TransportTypeRemote},
+			desireTransportName: testRemoteDefinition(),
 		}},
 		TransportRegistry: transportclient.Registry{
 			desireTransportName:                    desireclient.NewClient(store, desireOwner),
@@ -406,7 +389,7 @@ func TestResourceExecutor_DesireCleanupFailureBlocksDependentDelete(t *testing.T
 			}}
 			re := newResourceExecutor(&ExecutorConfig{
 				Config: &configloader.Config{Transports: map[string]configloader.TransportDefinition{
-					desireTransportName: {Type: configloader.TransportTypeRemote},
+					desireTransportName: testRemoteDefinition(),
 				}},
 				TransportRegistry: transportclient.Registry{
 					desireTransportName: desireclient.NewClient(
@@ -451,7 +434,7 @@ func TestResourceExecutor_DesireTransport_StaleReadDelaysEarlierDependentOneEven
 	}}
 	re := newResourceExecutor(&ExecutorConfig{
 		Config: &configloader.Config{Transports: map[string]configloader.TransportDefinition{
-			desireTransportName: {Type: configloader.TransportTypeRemote},
+			desireTransportName: testRemoteDefinition(),
 		}},
 		TransportRegistry: transportclient.Registry{
 			desireTransportName:                    desireclient.NewClient(store, desireOwner),
@@ -498,7 +481,7 @@ func TestResourceExecutor_DesireTransport_CleanedPrerequisiteAfterDependent(t *t
 	}}
 	re := newResourceExecutor(&ExecutorConfig{
 		Config: &configloader.Config{Transports: map[string]configloader.TransportDefinition{
-			desireTransportName: {Type: configloader.TransportTypeRemote},
+			desireTransportName: testRemoteDefinition(),
 		}},
 		TransportRegistry: transportclient.Registry{
 			desireTransportName:                    desireclient.NewClient(store, desireOwner),
@@ -599,7 +582,7 @@ func TestResourceExecutor_UnsyncedPrerequisiteDoesNotSatisfyCreateGate(t *testin
 	dependentClient := k8sclient.NewMockK8sClient()
 	re := newResourceExecutor(&ExecutorConfig{
 		Config: &configloader.Config{Transports: map[string]configloader.TransportDefinition{
-			desireTransportName: {Type: configloader.TransportTypeRemote},
+			desireTransportName: testRemoteDefinition(),
 		}},
 		TransportRegistry: transportclient.Registry{
 			desireTransportName:                    desireClient,
@@ -681,7 +664,7 @@ func TestResourceExecutor_ExecuteAll_DiscoveryFailure(t *testing.T) {
 
 	resource := configloader.Resource{
 		Name:      "test-resource",
-		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Transport: new("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -781,10 +764,8 @@ func TestResourceExecutor_ExecuteAll_StoresNestedDiscoveriesByName(t *testing.T)
 	})
 
 	resource := configloader.Resource{
-		Name: "resource0",
-		Transport: &configloader.TransportConfig{
-			Client: "kubernetes",
-		},
+		Name:      "resource0",
+		Transport: new("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "work.open-cluster-management.io/v1",
 			"kind":       "ManifestWork",
@@ -853,10 +834,8 @@ func runNestedDiscoveryExecuteAll(
 	name := parent.GetName()
 	ns := parent.GetNamespace()
 	resource := configloader.Resource{
-		Name: "resource0",
-		Transport: &configloader.TransportConfig{
-			Client: "kubernetes",
-		},
+		Name:      "resource0",
+		Transport: new("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": parent.GetAPIVersion(),
 			"kind":       parent.GetKind(),
@@ -1292,9 +1271,7 @@ data:
 	assert.Equal(t, "cluster-1", data)
 }
 
-func TestResolveGVK_StringManifest(t *testing.T) {
-	re := &ResourceExecutor{}
-
+func TestStaticGVK_StringManifest(t *testing.T) {
 	tests := []struct {
 		name        string
 		manifest    interface{}
@@ -1356,7 +1333,7 @@ func TestResolveGVK_StringManifest(t *testing.T) {
 			resource := configloader.Resource{
 				Manifest: tt.manifest,
 			}
-			gvk := re.resolveGVK(resource)
+			gvk := resource.StaticGVK()
 
 			if tt.wantEmpty {
 				assert.True(t, gvk.Empty(), "expected empty GVK")
@@ -1373,7 +1350,7 @@ func TestResolveGVK_StringManifest(t *testing.T) {
 func newResourceWithLifecycle(expression, propagationPolicy string) configloader.Resource {
 	r := configloader.Resource{
 		Name:      "test-resource",
-		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Transport: new("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -1402,7 +1379,7 @@ func newResourceWithLifecycle(expression, propagationPolicy string) configloader
 func newResourceWithLifecycleCreate(expression string) configloader.Resource {
 	r := configloader.Resource{
 		Name:      "test-resource",
-		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Transport: new("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -1603,7 +1580,7 @@ func TestResourceExecutor_LifecycleCreate_Absent_NormalApply(t *testing.T) {
 
 	resource := configloader.Resource{
 		Name:      "test-resource",
-		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Transport: new("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -1862,7 +1839,7 @@ func TestResourceExecutor_LifecycleDelete_NoLifecycle_NormalApply(t *testing.T) 
 
 	resource := configloader.Resource{
 		Name:      "test-resource",
-		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Transport: new("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -1932,7 +1909,7 @@ func TestResourceExecutor_LifecycleDelete_OrderingViaResources_InstantDelete(t *
 
 	clusterJob := configloader.Resource{
 		Name:      "clusterJob",
-		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Transport: new("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "batch/v1",
 			"kind":       "Job",
@@ -1949,7 +1926,7 @@ func TestResourceExecutor_LifecycleDelete_OrderingViaResources_InstantDelete(t *
 
 	clusterConfigMap := configloader.Resource{
 		Name:      "clusterConfigMap",
-		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Transport: new("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -2008,7 +1985,7 @@ func TestResourceExecutor_LifecycleDelete_OrderingViaResources_WithFinalizers(t 
 
 	clusterJob := configloader.Resource{
 		Name:      "clusterJob",
-		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Transport: new("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "batch/v1",
 			"kind":       "Job",
@@ -2025,7 +2002,7 @@ func TestResourceExecutor_LifecycleDelete_OrderingViaResources_WithFinalizers(t 
 
 	clusterConfigMap := configloader.Resource{
 		Name:      "clusterConfigMap",
-		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Transport: new("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -2082,7 +2059,7 @@ func TestResourceExecutor_LifecycleDelete_OrderingSecondReconciliation(t *testin
 
 	clusterJob := configloader.Resource{
 		Name:      "clusterJob",
-		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Transport: new("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "batch/v1",
 			"kind":       "Job",
@@ -2097,7 +2074,7 @@ func TestResourceExecutor_LifecycleDelete_OrderingSecondReconciliation(t *testin
 	}
 	clusterConfigMap := configloader.Resource{
 		Name:      "clusterConfigMap",
-		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Transport: new("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -2347,7 +2324,7 @@ func TestResourceExecutor_LifecycleDelete_DeleteConfigNil(t *testing.T) {
 
 	resource := configloader.Resource{
 		Name:      "test-resource",
-		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Transport: new("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -2371,66 +2348,6 @@ func TestResourceExecutor_LifecycleDelete_DeleteConfigNil(t *testing.T) {
 }
 
 // ---- MEDIUM: Maestro async deletion through executor ----
-
-func TestResourceExecutor_LifecycleDelete_Maestro_AsyncDeletion(t *testing.T) {
-	// Maestro transport: when.expression is true → delete is sent with a non-nil TransportContext.
-	// Maestro deletion is async: the resource stays discoverable (deletionTimestamp set, not removed).
-	// Post-delete rediscovery still finds the resource → stored as non-nil → dependents wait.
-	discovered := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "work.open-cluster-management.io/v1",
-			"kind":       "ManifestWork",
-			"metadata":   map[string]interface{}{"name": "cluster-1-work", "namespace": "cluster-1"},
-		},
-	}
-
-	// keepOnDeleteMockClient does NOT remove from Resources on delete — simulates Maestro async cleanup.
-	mock := &keepOnDeleteMockClient{MockK8sClient: k8sclient.NewMockK8sClient()}
-	mock.Resources["cluster-1/cluster-1-work"] = discovered
-
-	re := newResourceExecutor(&ExecutorConfig{
-		TransportRegistry: transportclient.Registry{configloader.TransportClientMaestro: mock},
-	})
-
-	resource := configloader.Resource{
-		Name: "clusterWork",
-		Transport: &configloader.TransportConfig{
-			Client:  "maestro",
-			Maestro: &configloader.MaestroTransportConfig{TargetCluster: "cluster-1"},
-		},
-		Manifest: map[string]interface{}{
-			"apiVersion": "work.open-cluster-management.io/v1",
-			"kind":       "ManifestWork",
-			"metadata":   map[string]interface{}{"name": "cluster-1-work", "namespace": "cluster-1"},
-		},
-		Discovery: &configloader.DiscoveryConfig{Namespace: "cluster-1", ByName: "cluster-1-work"},
-		Lifecycle: &configloader.ResourceLifecycle{
-			Delete: &configloader.LifecycleDelete{
-				When: &configloader.LifecycleWhen{Expression: "deleted_time != null"},
-			},
-		},
-	}
-
-	execCtx := NewExecutionContext(context.Background(), nil, nil)
-	execCtx.Params["deleted_time"] = testDeletedTime
-
-	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{resource}, execCtx)
-
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Equal(t, StatusSuccess, results[0].Status)
-	assert.Equal(t, manifest.OperationDelete, results[0].Operation)
-
-	// Maestro transport must pass a non-nil TransportContext to DeleteResource.
-	assert.NotNil(t, mock.DeleteCalledWithTarget,
-		"Maestro transport must supply a non-nil TransportContext to DeleteResource")
-
-	// Resource stays non-nil in context: async cleanup → dependents wait for next reconciliation.
-	storedVal, exists := execCtx.Resources["clusterWork"]
-	assert.True(t, exists, "resource key must be present in execCtx after Maestro delete")
-	assert.NotNil(t, storedVal,
-		"non-nil stored: Maestro deletion is async — dependents must wait for next reconciliation")
-}
 
 // multiDeleteMock tracks which resource names were passed to DeleteResource and always
 // returns a configured error, while GetResource returns a distinct object per name.
@@ -2647,7 +2564,7 @@ func TestResourceExecutor_LifecycleDelete_BySelectors(t *testing.T) {
 
 	resource := configloader.Resource{
 		Name:      "test-resource",
-		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Transport: new("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -2930,6 +2847,17 @@ const (
 	desireOwner         = "hyperfleet-adapter"
 )
 
+func testRemoteDefinition() configloader.TransportDefinition {
+	return configloader.TransportDefinition{
+		Type:          configloader.TransportTypeRemote,
+		TargetCluster: "cluster-1",
+		ResourcePlurals: map[string]string{
+			"v1/ConfigMap": "configmaps",
+			"v1/Namespace": "namespaces",
+		},
+	}
+}
+
 var testDesireID = desiretest.TestIdentity{
 	ManagementCluster: "cluster-1",
 	Resource:          "configmaps",
@@ -2955,7 +2883,7 @@ func newDesireExecutor(store desire.SpecStore) *ResourceExecutor {
 	return newResourceExecutor(&ExecutorConfig{
 		Config: &configloader.Config{
 			Transports: map[string]configloader.TransportDefinition{
-				desireTransportName: {Type: configloader.TransportTypeRemote},
+				desireTransportName: testRemoteDefinition(),
 			},
 		},
 		TransportRegistry: transportclient.Registry{
@@ -2966,14 +2894,8 @@ func newDesireExecutor(store desire.SpecStore) *ResourceExecutor {
 
 func newDesireResourceWithLifecycle(expression, propagationPolicy string) configloader.Resource {
 	r := configloader.Resource{
-		Name: "test-resource",
-		Transport: &configloader.TransportConfig{
-			Client: desireTransportName,
-			Desire: &configloader.DesireTransportConfig{
-				TargetCluster: testDesireID.ManagementCluster,
-				Resource:      testDesireID.Resource,
-			},
-		},
+		Name:      "test-resource",
+		Transport: new(desireTransportName),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -3552,7 +3474,7 @@ func TestResourceExecutor_DesireTransport_UnsyncedDependencyBlocksDelete(t *test
 	re := newResourceExecutor(&ExecutorConfig{
 		Config: &configloader.Config{
 			Transports: map[string]configloader.TransportDefinition{
-				desireTransportName: {Type: configloader.TransportTypeRemote},
+				desireTransportName: testRemoteDefinition(),
 			},
 		},
 		TransportRegistry: transportclient.Registry{
@@ -3601,7 +3523,7 @@ func TestResourceExecutor_DesireTransport_PendingCleanupBlocksDeleteDependency(t
 	re := newResourceExecutor(&ExecutorConfig{
 		Config: &configloader.Config{
 			Transports: map[string]configloader.TransportDefinition{
-				desireTransportName: {Type: configloader.TransportTypeRemote},
+				desireTransportName: testRemoteDefinition(),
 			},
 		},
 		TransportRegistry: transportclient.Registry{
@@ -3654,7 +3576,7 @@ func TestResourceExecutor_DesireSelectorDeleteRejectedWithPendingApply(t *testin
 
 	results, err := newDesireExecutor(store).ExecuteAll(ctx, []configloader.Resource{resource}, execCtx)
 
-	require.ErrorContains(t, err, "selector-based lifecycle deletion is unsupported for desire transport")
+	require.ErrorContains(t, err, "selector-based lifecycle deletion is unsupported for remote transport")
 	require.Len(t, results, 1)
 	assert.Equal(t, StatusFailed, results[0].Status)
 	_, err = store.GetDeleteDesire(ctx, testDesireID.Delete())
@@ -3707,7 +3629,7 @@ func TestResourceExecutor_DesireSelectorDeleteIsRejected(t *testing.T) {
 
 	results, err := newDesireExecutor(store).ExecuteAll(ctx, []configloader.Resource{resource}, execCtx)
 
-	require.ErrorContains(t, err, "selector-based lifecycle deletion is unsupported for desire transport")
+	require.ErrorContains(t, err, "selector-based lifecycle deletion is unsupported for remote transport")
 	require.Len(t, results, 1)
 	assert.Equal(t, StatusFailed, results[0].Status)
 	assert.Equal(t, ResourceStatePresent, execCtx.ResourceStates[resource.Name],

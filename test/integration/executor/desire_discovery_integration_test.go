@@ -24,6 +24,14 @@ import (
 
 const desireDiscoveryTransport = "desire-primary"
 
+func desireDiscoveryDefinition() configloader.TransportDefinition {
+	return configloader.TransportDefinition{
+		Type:            configloader.TransportTypeRemote,
+		TargetCluster:   desireDiscoveryIdentity.ManagementCluster,
+		ResourcePlurals: map[string]string{"v1/ConfigMap": desireDiscoveryIdentity.Resource},
+	}
+}
+
 const mirroredStatusObject = `{
 	"apiVersion":"v1","kind":"ConfigMap",
 	"metadata":{"name":"remote-config","namespace":"default"},
@@ -273,7 +281,7 @@ func desireDiscoveryConfig() *configloader.Config {
 	return &configloader.Config{
 		Adapter: configloader.AdapterInfo{Name: "desire-discovery-test"},
 		Transports: map[string]configloader.TransportDefinition{
-			desireDiscoveryTransport: {Type: configloader.TransportTypeRemote},
+			desireDiscoveryTransport: desireDiscoveryDefinition(),
 		},
 		Resources: []configloader.Resource{{
 			Name: "remoteConfig",
@@ -286,13 +294,7 @@ func desireDiscoveryConfig() *configloader.Config {
 					"annotations": map[string]interface{}{constants.AnnotationGeneration: "1"},
 				},
 			},
-			Transport: &configloader.TransportConfig{
-				Client: desireDiscoveryTransport,
-				Desire: &configloader.DesireTransportConfig{
-					TargetCluster: desireDiscoveryIdentity.ManagementCluster,
-					Resource:      desireDiscoveryIdentity.Resource,
-				},
-			},
+			Transport: new(desireDiscoveryTransport),
 			Discovery: &configloader.DiscoveryConfig{
 				Namespace: desireDiscoveryIdentity.Namespace,
 				ByName:    desireDiscoveryIdentity.Name,

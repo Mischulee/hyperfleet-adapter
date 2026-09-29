@@ -12,7 +12,6 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/configloader"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/desireclient"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8sclient"
-	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/maestroclient"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/transportclient"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/utils"
 	"github.com/openshift-hyperfleet/hyperfleet-applier/pkg/desire"
@@ -39,32 +38,40 @@ func Build(ctx context.Context, config *configloader.Config) (*Runtime, error) {
 	}
 
 	runtime := &Runtime{Registry: make(transportclient.Registry)}
-	if len(config.Transports) == 0 {
-		if err := runtime.buildLegacy(ctx, config); err != nil {
-			closeAfterBuildFailure(ctx, runtime)
-			return nil, err
-		}
-		return runtime, nil
-	}
-
 	stores, err := runtime.buildStores(ctx, config.Stores)
 	if err != nil {
 		closeAfterBuildFailure(ctx, runtime)
 		return nil, err
 	}
 
+	// Every local transport is built from clients.kubernetes, so all of them,
+	// including the implicit one, share a single client.
+	var kubernetesClient transportclient.TransportClient
 	for _, name := range utils.SortedMapKeys(config.Transports) {
 		definition := config.Transports[name]
-		client, err := buildTransport(ctx, config, definition, stores)
-		if err != nil {
-			closeAfterBuildFailure(ctx, runtime)
-			return nil, fmt.Errorf("build transport %q: %w", name, err)
+		client := kubernetesClient
+		if definition.Type != configloader.TransportTypeKubernetes || client == nil {
+			client, err = buildTransport(ctx, config, definition, stores)
+			if err != nil {
+				closeAfterBuildFailure(ctx, runtime)
+				return nil, fmt.Errorf("build transport %q: %w", name, err)
+			}
+			if definition.Type == configloader.TransportTypeKubernetes {
+				kubernetesClient = client
+			}
 		}
 		runtime.Registry[configloader.NormalizeRegistryName(name)] = client
 	}
-	if err := runtime.registerCompatibilityAlias(config, nil); err != nil {
-		closeAfterBuildFailure(ctx, runtime)
-		return nil, err
+	if _, configured := runtime.Registry[configloader.TransportClientKubernetes]; !configured &&
+		needsImplicitKubernetes(config) {
+		if kubernetesClient == nil {
+			kubernetesClient, err = buildKubernetes(ctx, config.Clients.Kubernetes)
+			if err != nil {
+				closeAfterBuildFailure(ctx, runtime)
+				return nil, fmt.Errorf("build transport %q: %w", configloader.TransportClientKubernetes, err)
+			}
+		}
+		runtime.Registry[configloader.TransportClientKubernetes] = kubernetesClient
 	}
 
 	return runtime, nil
@@ -76,20 +83,11 @@ func closeAfterBuildFailure(ctx context.Context, runtime *Runtime) {
 	}
 }
 
-// validateNamedTransportConfig mirrors the config validator's registry
-// invariants so callers that build a registry from a config which did not pass
-// through LoadConfig still get the same guardrails.
+// validateNamedTransportConfig applies the loader's routing invariants so
+// callers that build a registry from a config which did not pass through
+// LoadConfig still get the same guardrails.
 func validateNamedTransportConfig(config *configloader.Config) error {
-	if err := configloader.ValidateStoreNameCollisions(config.Stores); err != nil {
-		return err
-	}
-	if err := configloader.ValidateTransportNameCollisions(config.Transports); err != nil {
-		return err
-	}
-	if len(config.Transports) > 0 && config.Clients.Maestro != nil {
-		return fmt.Errorf("clients.maestro cannot be configured when transports are set")
-	}
-	return nil
+	return configloader.ValidateConfigRouting(config)
 }
 
 // BuildRecording builds a registry for dry-run execution without creating any
@@ -112,50 +110,21 @@ func BuildRecording(
 	for name := range config.Transports {
 		runtime.Registry[configloader.NormalizeRegistryName(name)] = client
 	}
-	if err := runtime.registerCompatibilityAlias(config, client); err != nil {
-		return nil, err
+	if needsImplicitKubernetes(config) {
+		runtime.Registry[configloader.TransportClientKubernetes] = client
 	}
 	return runtime, nil
 }
 
-// CompatibilityKey returns the historical registry key expected by the
-// singleton executor. Maestro overrides the Kubernetes default.
-func CompatibilityKey(clients configloader.ClientsConfig) string {
-	if clients.Maestro != nil {
-		return configloader.TransportClientMaestro
+// needsImplicitKubernetes reports whether any resource omits its transport or
+// names local Kubernetes, so a local client must be registered.
+func needsImplicitKubernetes(config *configloader.Config) bool {
+	for _, resource := range config.Resources {
+		if configloader.NormalizeRegistryName(resource.GetTransportName()) == configloader.TransportClientKubernetes {
+			return true
+		}
 	}
-	return configloader.TransportClientKubernetes
-}
-
-// registerCompatibilityAlias keeps the singleton executor working until it
-// resolves configured transport names itself.
-func (r *Runtime) registerCompatibilityAlias(
-	config *configloader.Config,
-	fallback transportclient.TransportClient,
-) error {
-	key := CompatibilityKey(config.Clients)
-	if _, ok := r.Registry[key]; ok {
-		return nil
-	}
-	if fallback != nil {
-		r.Registry[key] = fallback
-		return nil
-	}
-
-	names := utils.SortedMapKeys(config.Transports)
-	switch len(names) {
-	case 0:
-		return nil
-	case 1:
-		r.Registry[key] = r.Registry[configloader.NormalizeRegistryName(names[0])]
-		return nil
-	default:
-		return fmt.Errorf(
-			"compatibility transport %q is ambiguous among configured transports %v",
-			key,
-			names,
-		)
-	}
+	return false
 }
 
 // Close releases all resources created by Build. It attempts every close and
@@ -174,37 +143,10 @@ func (r *Runtime) Close() error {
 	return firstErr
 }
 
-func (r *Runtime) buildLegacy(ctx context.Context, config *configloader.Config) error {
-	// Preserve the old selection behavior: Maestro is the sole default when it
-	// is configured; Kubernetes is otherwise the default.
-	if config.Clients.Maestro != nil {
-		client, err := buildMaestro(ctx, config.Clients.Maestro)
-		if err != nil {
-			return fmt.Errorf("build transport %q: %w", configloader.TransportClientMaestro, err)
-		}
-		r.Registry[configloader.TransportClientMaestro] = client
-		r.closers = append(r.closers, client)
-		return nil
-	}
-
-	client, err := buildKubernetes(ctx, config.Clients.Kubernetes)
-	if err != nil {
-		return fmt.Errorf("build transport %q: %w", configloader.TransportClientKubernetes, err)
-	}
-	r.Registry[configloader.TransportClientKubernetes] = client
-	return nil
-}
-
 func (r *Runtime) buildStores(
 	ctx context.Context,
 	definitions map[string]configloader.StoreDefinition,
 ) (map[string]desire.SpecStore, error) {
-	// Guard locally as well as in validateNamedTransportConfig: buildStores
-	// overwrites on the normalised key, so a duplicate must never reach it.
-	if err := configloader.ValidateStoreNameCollisions(definitions); err != nil {
-		return nil, err
-	}
-
 	stores := make(map[string]desire.SpecStore, len(definitions))
 	for _, name := range utils.SortedMapKeys(definitions) {
 		definition := definitions[name]
@@ -264,41 +206,4 @@ func buildKubernetes(
 		QPS:            config.QPS,
 		Burst:          config.Burst,
 	})
-}
-
-func buildMaestro(
-	ctx context.Context,
-	config *configloader.MaestroClientConfig,
-) (*maestroclient.Client, error) {
-	maestroConfig := &maestroclient.Config{
-		MaestroServerAddr: config.HTTPServerAddress,
-		GRPCServerAddr:    config.GRPCServerAddress,
-		SourceID:          config.SourceID,
-		Insecure:          config.Insecure,
-	}
-	if config.Timeout != "" {
-		timeout, err := time.ParseDuration(config.Timeout)
-		if err != nil {
-			return nil, fmt.Errorf("invalid maestro timeout %q: %w", config.Timeout, err)
-		}
-		maestroConfig.HTTPTimeout = timeout
-	}
-	if config.ServerHealthinessTimeout != "" {
-		timeout, err := time.ParseDuration(config.ServerHealthinessTimeout)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"invalid maestro serverHealthinessTimeout %q: %w",
-				config.ServerHealthinessTimeout,
-				err,
-			)
-		}
-		maestroConfig.ServerHealthinessTimeout = timeout
-	}
-	if config.Auth.TLSConfig != nil {
-		maestroConfig.CAFile = config.Auth.TLSConfig.CAFile
-		maestroConfig.ClientCertFile = config.Auth.TLSConfig.CertFile
-		maestroConfig.ClientKeyFile = config.Auth.TLSConfig.KeyFile
-		maestroConfig.HTTPCAFile = config.Auth.TLSConfig.HTTPCAFile
-	}
-	return maestroclient.NewMaestroClient(ctx, maestroConfig)
 }

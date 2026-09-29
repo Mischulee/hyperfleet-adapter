@@ -160,6 +160,9 @@ func LoadConfig(opts ...LoadOption) (*Config, error) {
 			return nil, fmt.Errorf("failed to load task config file references: %w", err)
 		}
 	}
+	if err := ValidateResourceTransports(adapterCfg, taskCfg); err != nil {
+		return nil, fmt.Errorf("resource transport validation failed: %w", err)
+	}
 
 	// Semantic validation for task config (optional)
 	if !o.skipSemanticValidation {

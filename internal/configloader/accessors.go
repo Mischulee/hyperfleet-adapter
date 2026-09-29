@@ -170,18 +170,13 @@ func (c *Config) ResourceNames() []string {
 // Resource Accessors
 // -----------------------------------------------------------------------------
 
-// GetTransportClient returns the transport client type for this resource.
-// Defaults to "kubernetes" if no transport config is set.
-func (r *Resource) GetTransportClient() string {
-	if r == nil || r.Transport == nil || r.Transport.Client == "" {
+// GetTransportName returns the named transport, defaulting to local Kubernetes.
+// An explicitly blank name remains blank so validation can reject it.
+func (r *Resource) GetTransportName() string {
+	if r == nil || r.Transport == nil {
 		return TransportClientKubernetes
 	}
-	return r.Transport.Client
-}
-
-// IsMaestroTransport returns true if this resource uses the maestro transport client
-func (r *Resource) IsMaestroTransport() bool {
-	return r.GetTransportClient() == TransportClientMaestro
+	return *r.Transport
 }
 
 // HasManifestRef returns true if the manifest uses a ref (single file reference)
