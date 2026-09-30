@@ -204,8 +204,15 @@ func (re *ResourceExecutor) executeResource(
 	}
 
 	// Discovery, deletion, and remote plural routing use the static GVK, so the
-	// rendered object must not change it (for example through a template branch).
-	if staticGVK := resource.StaticGVK(); !staticGVK.Empty() && obj.GroupVersionKind() != staticGVK {
+	// rendered object must not change it (for example through a conditional
+	// apiVersion or kind line the static scan cannot see).
+	staticGVK, err := resource.StaticGVK()
+	if err != nil {
+		result.Status = StatusFailed
+		result.Error = err
+		return result, NewExecutorError(PhaseResources, resource.Name, "failed to read manifest GVK", err)
+	}
+	if obj.GroupVersionKind() != staticGVK {
 		gvkErr := fmt.Errorf("rendered manifest GVK %q does not match static GVK %q",
 			obj.GroupVersionKind().String(), staticGVK.String())
 		result.Status = StatusFailed
@@ -390,10 +397,7 @@ func (re *ResourceExecutor) discoverResource(
 
 	// Discover by name
 	if discovery.ByName != "" {
-		gvk := resource.StaticGVK()
-		discovered, discoverErr := transportClient.GetResource(ctx, gvk, dt.Namespace, dt.Name, transportTarget)
-		re.recordDiscoveryState(resource, execCtx, discovered, discoverErr)
-		return discovered, discoverErr
+		return re.discoverResourceByName(ctx, resource, execCtx, transportClient, transportTarget, dt)
 	}
 
 	// Discover by label selector
@@ -417,7 +421,10 @@ func (re *ResourceExecutor) discoverResource(
 			LabelSelector: labelSelector,
 		}
 
-		gvk := resource.StaticGVK()
+		gvk, err := resource.StaticGVK()
+		if err != nil {
+			return nil, err
+		}
 
 		var discovered *unstructured.Unstructured
 		list, err := transportClient.DiscoverResources(ctx, gvk, discoveryConfig, transportTarget)
@@ -449,7 +456,10 @@ func (re *ResourceExecutor) discoverResourceByName(
 	transportTarget transportclient.TransportContext,
 	dt *discoveryTarget,
 ) (*unstructured.Unstructured, error) {
-	gvk := resource.StaticGVK()
+	gvk, err := resource.StaticGVK()
+	if err != nil {
+		return nil, err
+	}
 	discovered, discoverErr := transportClient.GetResource(ctx, gvk, dt.Namespace, dt.Name, transportTarget)
 	re.recordDiscoveryState(resource, execCtx, discovered, discoverErr)
 	return discovered, discoverErr
@@ -675,9 +685,9 @@ func (re *ResourceExecutor) resolveTransport(
 		return nil, nil, fmt.Errorf("transport %q target_cluster %q must be a Kubernetes DNS-1123 label: %s",
 			transportName, targetCluster, strings.Join(errs, ", "))
 	}
-	gvk := resource.StaticGVK()
-	if gvk.Empty() {
-		return nil, nil, fmt.Errorf("transport %q requires a static manifest apiVersion and kind", transportName)
+	gvk, err := resource.StaticGVK()
+	if err != nil {
+		return nil, nil, fmt.Errorf("transport %q manifest: %w", transportName, err)
 	}
 	plural, ok := definition.PluralForGVK(gvk)
 	if !ok {
@@ -748,24 +758,29 @@ func (re *ResourceExecutor) executeResourceDelete(
 	transportClient transportclient.TransportClient,
 	transportTarget transportclient.TransportContext,
 ) (ResourceResult, error) {
+	result := ResourceResult{
+		Name:      resource.Name,
+		Status:    StatusSuccess,
+		Operation: manifest.OperationDelete,
+	}
+
 	// Extract resource type (Kubernetes kind) from manifest for metrics labeling.
 	// This is done early so it's available for all metric recording paths (success/failure).
-	gvk := resource.StaticGVK()
-	resourceType := gvk.Kind
-	if resourceType == "" {
-		resourceType = metrics.ResourceTypeUnknown
+	gvk, err := resource.StaticGVK()
+	if err != nil {
+		result.Status = StatusFailed
+		result.Error = err
+		re.recordResourceError(execCtx, resource, err)
+		re.metrics.RecordDeletion(metrics.ResourceTypeUnknown, metrics.DeletionStatusError)
+		return result, NewExecutorError(PhaseResources, resource.Name, "failed to read manifest GVK", err)
 	}
+	resourceType := gvk.Kind
 
 	// Metrics: track deletion in-progress and duration
 	startTime := time.Now()
 	re.metrics.IncDeletionInProgress(resourceType)
 	defer re.metrics.DecDeletionInProgress(resourceType)
 
-	result := ResourceResult{
-		Name:      resource.Name,
-		Status:    StatusSuccess,
-		Operation: manifest.OperationDelete,
-	}
 	if lifecycle, ok := transportClient.(transportclient.DeletionLifecycle); ok {
 		return re.executeDesireResourceDelete(ctx, resource, execCtx, transportClient,
 			lifecycle, transportTarget, gvk, resourceType, startTime, result)

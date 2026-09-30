@@ -142,10 +142,12 @@ func namedRemoteResource(discovery *configloader.DiscoveryConfig) configloader.R
 func TestResourceExecutor_RejectsRenderedGVKThatDiffersFromStaticGVK(t *testing.T) {
 	remote := k8sclient.NewMockK8sClient()
 	resource := namedRemoteResource(nil)
-	resource.Manifest = "apiVersion: v1\n{{ if .withKind }}\nkind: ConfigMap\n{{ end }}\n" +
+	// The two values open and close a quoted string that swallows the kind line.
+	resource.Manifest = "apiVersion: v1\nnote: {{ .open }}\nkind: ConfigMap\nend: {{ .close }}\n" +
 		"metadata:\n  name: test-config\n  namespace: default\n"
 	execCtx := NewExecutionContext(t.Context(), nil, nil)
-	execCtx.Params["withKind"] = false
+	execCtx.Params["open"] = `"x`
+	execCtx.Params["close"] = `y"`
 
 	_, err := newNamedRemoteResourceExecutor(remote, k8sclient.NewMockK8sClient()).ExecuteAll(
 		t.Context(), []configloader.Resource{resource}, execCtx)
@@ -1295,7 +1297,7 @@ func TestStaticGVK_StringManifest(t *testing.T) {
 		wantGroup   string
 		wantVersion string
 		wantKind    string
-		wantEmpty   bool
+		wantErr     bool
 	}{
 		{
 			name: "map manifest",
@@ -1329,19 +1331,27 @@ func TestStaticGVK_StringManifest(t *testing.T) {
 			wantKind:    "Deployment",
 		},
 		{
-			name:      "nil manifest",
-			manifest:  nil,
-			wantEmpty: true,
+			name: "map manifest with a templated kind",
+			manifest: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "{{ .kind }}",
+			},
+			wantErr: true,
 		},
 		{
-			name:      "invalid string YAML",
-			manifest:  "not: valid: yaml: {{{}",
-			wantEmpty: true,
+			name:     "nil manifest",
+			manifest: nil,
+			wantErr:  true,
 		},
 		{
-			name:      "string manifest missing kind",
-			manifest:  "apiVersion: v1\nmetadata:\n  name: test\n",
-			wantEmpty: true,
+			name:     "invalid string YAML",
+			manifest: "not: valid: yaml: {{{}",
+			wantErr:  true,
+		},
+		{
+			name:     "string manifest missing kind",
+			manifest: "apiVersion: v1\nmetadata:\n  name: test\n",
+			wantErr:  true,
 		},
 	}
 
@@ -1350,11 +1360,12 @@ func TestStaticGVK_StringManifest(t *testing.T) {
 			resource := configloader.Resource{
 				Manifest: tt.manifest,
 			}
-			gvk := resource.StaticGVK()
+			gvk, err := resource.StaticGVK()
 
-			if tt.wantEmpty {
-				assert.True(t, gvk.Empty(), "expected empty GVK")
+			if tt.wantErr {
+				assert.Error(t, err)
 			} else {
+				require.NoError(t, err)
 				assert.Equal(t, tt.wantGroup, gvk.Group)
 				assert.Equal(t, tt.wantVersion, gvk.Version)
 				assert.Equal(t, tt.wantKind, gvk.Kind)

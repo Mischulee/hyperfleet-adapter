@@ -75,28 +75,15 @@ func validateTargetClusterSyntax(path, target string) error {
 	return nil
 }
 
-// StaticGVK returns the manifest GVK without rendering the manifest. Remote
-// reads and deletion need this identity before an apply has rendered it.
-func (r Resource) StaticGVK() schema.GroupVersionKind {
-	if raw, ok := r.Manifest.(string); ok {
-		return manifest.ExtractGVKFromString(raw)
-	}
-	data := normalizeToStringKeyMap(r.Manifest)
-	if data == nil {
-		return schema.GroupVersionKind{}
-	}
-	apiVersion, okVersion := data["apiVersion"].(string)
-	kind, okKind := data["kind"].(string)
-	if !okVersion || !okKind || apiVersion == "" || kind == "" ||
-		apiVersion != strings.TrimSpace(apiVersion) || kind != strings.TrimSpace(kind) ||
-		strings.Contains(apiVersion+kind, "{{") {
-		return schema.GroupVersionKind{}
-	}
-	gv, err := schema.ParseGroupVersion(apiVersion)
+// StaticGVK returns the manifest GVK without rendering the manifest; see
+// manifest.StaticGVK. A map manifest is checked as the YAML text the executor
+// renders from it, so both manifest forms follow the same rules.
+func (r Resource) StaticGVK() (schema.GroupVersionKind, error) {
+	text, err := manifest.ToYAMLString(r.Manifest)
 	if err != nil {
-		return schema.GroupVersionKind{}
+		return schema.GroupVersionKind{}, err
 	}
-	return gv.WithKind(kind)
+	return manifest.StaticGVK(text)
 }
 
 // PluralForGVK looks up a static manifest kind on a remote route. Viper folds
@@ -115,24 +102,29 @@ func (d TransportDefinition) PluralForGVK(gvk schema.GroupVersionKind) (string, 
 	return "", false
 }
 
-// ValidateResourceTransports checks cross-file routing after manifest refs load.
+// ValidateResourceTransports checks resource routing in the merged config after manifest refs load.
 // These are structural safety checks and also run when semantic checks are skipped.
-func ValidateResourceTransports(adapter *AdapterConfig, task *AdapterTaskConfig) error {
-	available := utils.SortedMapKeys(adapter.Transports)
+func ValidateResourceTransports(config *Config) error {
+	available := utils.SortedMapKeys(config.Transports)
 	if !slices.ContainsFunc(available, func(name string) bool {
 		return NormalizeRegistryName(name) == TransportClientKubernetes
 	}) {
 		available = append(available, TransportClientKubernetes)
 		slices.Sort(available)
 	}
-	vars := targetClusterVariables(task)
-	for i, resource := range task.Resources {
+	vars := targetClusterVariables(config)
+	for i, resource := range config.Resources {
 		path := fmt.Sprintf("resources[%d]", i)
 		if resource.Manifest == nil {
 			return fmt.Errorf("%s.manifest is required", path)
 		}
+		// Every transport discovers and deletes by this identity before rendering.
+		gvk, err := resource.StaticGVK()
+		if err != nil {
+			return fmt.Errorf("%s.manifest: %w", path, err)
+		}
 		if resource.Transport != nil && resource.Transport.Legacy {
-			maestro, err := validateLegacyTransport(adapter, task, resource, path, vars)
+			maestro, err := validateLegacyTransport(config, resource, path, vars)
 			if err != nil {
 				return err
 			}
@@ -144,17 +136,13 @@ func ValidateResourceTransports(adapter *AdapterConfig, task *AdapterTaskConfig)
 		if NormalizeRegistryName(name) == "" {
 			return fmt.Errorf("%s.transport must name a transport; available: %v", path, available)
 		}
-		definition, configured := TransportDefinitionByName(adapter.Transports, name)
+		definition, configured := TransportDefinitionByName(config.Transports, name)
 		if !configured && NormalizeRegistryName(name) != TransportClientKubernetes {
 			return fmt.Errorf("%s.transport references unknown transport %q; available: %v",
 				path, name, available)
 		}
 		if !configured || definition.Type != TransportTypeRemote {
 			continue
-		}
-		gvk := resource.StaticGVK()
-		if gvk.Empty() {
-			return fmt.Errorf("%s.manifest must have static apiVersion and kind for remote transport %q", path, name)
 		}
 		if _, ok := definition.PluralForGVK(gvk); !ok {
 			return fmt.Errorf("%s.manifest GVK %s has no resource_plurals mapping in transport %q",
@@ -185,26 +173,20 @@ func ValidateConfigRouting(config *Config) error {
 	if err := NewAdapterConfigValidator(adapter, "").validateTransportRegistry(); err != nil {
 		return err
 	}
-	return ValidateResourceTransports(adapter, &AdapterTaskConfig{
-		SchemaVersion: config.SchemaVersion,
-		Params:        config.Params,
-		Preconditions: config.Preconditions,
-		Resources:     config.Resources,
-		Post:          config.Post,
-	})
+	return ValidateResourceTransports(config)
 }
 
 // targetClusterVariables returns the names present in the execution params when
 // the executor renders target_cluster. Unlike GetDefinedVariables it excludes
 // post payloads and resource aliases, which are not params at that point.
-func targetClusterVariables(task *AdapterTaskConfig) map[string]bool {
+func targetClusterVariables(config *Config) map[string]bool {
 	vars := map[string]bool{"adapter": true, "config": true, "env": true, "event": true}
-	for _, param := range task.Params {
+	for _, param := range config.Params {
 		if param.Name != "" {
 			vars[param.Name] = true
 		}
 	}
-	for _, precondition := range task.Preconditions {
+	for _, precondition := range config.Preconditions {
 		// Only API call preconditions store params: the response under the
 		// precondition name, plus its captures.
 		if precondition.APICall == nil {

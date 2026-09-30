@@ -82,6 +82,18 @@ func TestRenderStringManifest(t *testing.T) {
 			wantErr:  true,
 		},
 		{
+			name:     "second document",
+			manifest: "apiVersion: v1\nkind: ConfigMap\n{{ .extra }}\n",
+			params:   map[string]interface{}{"extra": "---\napiVersion: v1\nkind: Secret"},
+			wantErr:  true,
+		},
+		{
+			name:        "empty documents around the object",
+			manifest:    "---\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: static\n---\n",
+			params:      map[string]interface{}{},
+			wantContain: `"name":"static"`,
+		},
+		{
 			name:        "no template expressions",
 			manifest:    "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: static",
 			params:      map[string]interface{}{},

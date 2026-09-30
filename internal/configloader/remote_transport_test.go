@@ -65,7 +65,9 @@ func TestLoadRemoteTransportTwoKinds(t *testing.T) {
 	definition, ok := TransportDefinitionByName(config.Transports, config.Resources[0].GetTransportName())
 	require.True(t, ok)
 	for _, resource := range config.Resources {
-		plural, mapped := definition.PluralForGVK(resource.StaticGVK())
+		gvk, err := resource.StaticGVK()
+		require.NoError(t, err)
+		plural, mapped := definition.PluralForGVK(gvk)
 		require.True(t, mapped)
 		assert.Contains(t, []string{"configmaps", "namespaces"}, plural)
 	}
@@ -84,7 +86,9 @@ func TestLoadRemoteTransportGroupedGVKAndLocalDefault(t *testing.T) {
 	require.NoError(t, err)
 	definition, ok := TransportDefinitionByName(config.Transports, "remote-primary")
 	require.True(t, ok)
-	plural, mapped := definition.PluralForGVK(config.Resources[1].StaticGVK())
+	gvk, err := config.Resources[1].StaticGVK()
+	require.NoError(t, err)
+	plural, mapped := definition.PluralForGVK(gvk)
 	require.True(t, mapped)
 	assert.Equal(t, "deployments", plural)
 
@@ -92,6 +96,26 @@ func TestLoadRemoteTransportGroupedGVKAndLocalDefault(t *testing.T) {
 	localConfig, err := loadRemoteConfig(t, remoteAdapterYAML, localTask)
 	require.NoError(t, err)
 	assert.Equal(t, TransportClientKubernetes, localConfig.Resources[0].GetTransportName())
+}
+
+func TestLoadRemoteTransportDottedGroupGVK(t *testing.T) {
+	adapter := strings.Replace(remoteAdapterYAML, `"v1/Namespace": namespaces`,
+		`"hypershift.openshift.io/v1beta1/HostedCluster": hostedclusters`, 1)
+	task := strings.Replace(remoteTaskYAML, `apiVersion: v1
+      kind: Namespace`, `apiVersion: hypershift.openshift.io/v1beta1
+      kind: HostedCluster`, 1)
+	config, err := loadRemoteConfig(t, adapter, task)
+	require.NoError(t, err)
+	definition, ok := TransportDefinitionByName(config.Transports, config.Resources[1].GetTransportName())
+	require.True(t, ok)
+	gvk, err := config.Resources[1].StaticGVK()
+	require.NoError(t, err)
+	assert.Equal(t, schema.GroupVersionKind{
+		Group: "hypershift.openshift.io", Version: "v1beta1", Kind: "HostedCluster",
+	}, gvk)
+	plural, mapped := definition.PluralForGVK(gvk)
+	require.True(t, mapped)
+	assert.Equal(t, "hostedclusters", plural)
 }
 
 func TestLoadRemoteTransportRejectsInvalidRoutingWithSemanticValidationSkipped(t *testing.T) {
@@ -201,7 +225,13 @@ resources:
 		{
 			name: "dynamic GVK", adapter: remoteAdapterYAML,
 			task: replaceTask("kind: ConfigMap", `kind: "{{ .kind }}"`),
-			want: "resources[0].manifest must have static apiVersion and kind",
+			want: "resources[0].manifest: line 2: kind must be a literal value",
+		},
+		{
+			name: "dynamic GVK on a local resource", adapter: remoteAdapterYAML,
+			task: strings.NewReplacer("transport: Remote-Primary", "transport: kubernetes",
+				"kind: ConfigMap", `kind: "{{ .kind }}"`).Replace(remoteTaskYAML),
+			want: "resources[0].manifest: line 2: kind must be a literal value",
 		},
 		{
 			name: "legacy block", adapter: remoteAdapterYAML,
@@ -246,7 +276,9 @@ resources:
 		WithAdapterConfigPath(adapterPath), WithTaskConfigPath(taskPath), WithSkipSemanticValidation(),
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "ConfigMap", config.Resources[0].StaticGVK().Kind)
+	gvk, err := config.Resources[0].StaticGVK()
+	require.NoError(t, err)
+	assert.Equal(t, "ConfigMap", gvk.Kind)
 }
 
 func TestLoadRemoteTransportTargetClusterAcceptsRuntimeParams(t *testing.T) {

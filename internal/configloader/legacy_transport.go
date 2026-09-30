@@ -83,14 +83,14 @@ func UsesMaestro(resources []Resource) bool {
 // returns maestro=true when the resource selects Maestro, which needs no
 // further named-route validation.
 func validateLegacyTransport(
-	adapter *AdapterConfig, task *AdapterTaskConfig, resource Resource, path string, vars map[string]bool,
+	config *Config, resource Resource, path string, vars map[string]bool,
 ) (maestro bool, err error) {
 	transport := resource.Transport
 	path += "." + FieldTransport
 	// TODO(HYPERFLEET-1443): the object form is accepted only without schema_version
 	// "2.0". Keep accepting unversioned v1 configs (no v1 diagnostic error) until the
 	// cutover lands, or every deployed adapter config fails at startup.
-	if task.SchemaVersion == schemaVersionV2 {
+	if config.SchemaVersion == schemaVersionV2 {
 		return false, fmt.Errorf("%s: the object form is not supported with schema_version %q; "+
 			"name a transport instead", path, schemaVersionV2)
 	}
@@ -109,7 +109,7 @@ func validateLegacyTransport(
 	if transport.Maestro == nil {
 		return false, fmt.Errorf("%s.%s is required for %s %q", path, FieldMaestro, FieldClient, TransportClientMaestro)
 	}
-	if adapter.Clients.Maestro == nil {
+	if config.Clients.Maestro == nil {
 		return false, fmt.Errorf("%s selects %q, but clients.maestro is not configured", path, TransportClientMaestro)
 	}
 	for _, match := range templateVarRegex.FindAllStringSubmatch(transport.Maestro.TargetCluster, -1) {
