@@ -379,6 +379,14 @@ test-helm: verify-helm-docs ## Test Helm charts (lint, template, validate, kubec
 		echo "ERROR: expected helm template to fail when messageRetentionDuration=0"; exit 1; \
 	fi
 	@echo "Pub/Sub zero retention validation OK"
+	@for values in charts/examples/*/values.yaml; do \
+		echo "Rendering $$values example overlay..."; \
+		output=$$(helm template example charts/ -f "$$values" \
+			--set image.registry=quay.io \
+			--set image.repository=openshift-hyperfleet/hyperfleet-adapter \
+			--set image.tag=test) || exit 1; \
+		echo "$$output" | $(call gotool,kubeconform) $(KUBECONFORM_FLAGS) || exit 1; \
+	done
 
 ##@ Code Quality
 

@@ -1,6 +1,7 @@
+schema_version: "2.0"
+
 # Task configuration for dry-run testing with Kubernetes transport
-# Unlike the Maestro example, Kubernetes transport applies resources directly
-# (no ManifestWork wrapper). Each K8s resource is a separate resource entry.
+# Each Kubernetes resource is a separate resource entry.
 params:
   - name: "clusterId"
     source: "event.id"
@@ -66,8 +67,6 @@ preconditions:
 resources:
   # Resource 0: Namespace — applied directly to the K8s cluster
   - name: "namespace0"
-    transport:
-      client: kubernetes
     manifest:
       apiVersion: v1
       kind: Namespace
@@ -86,8 +85,6 @@ resources:
 
   # Resource 1: ConfigMap — applied directly to the K8s cluster
   - name: "configmap0"
-    transport:
-      client: kubernetes
     manifest:
       apiVersion: v1
       kind: ConfigMap

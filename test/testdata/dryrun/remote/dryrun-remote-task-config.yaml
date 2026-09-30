@@ -1,0 +1,35 @@
+# Task configuration for a named remote transport dry run.
+schema_version: "2.0"
+
+params:
+  - name: clusterId
+    source: event.id
+    type: string
+    required: true
+  - name: clusterStatus
+    source:
+      api_call:
+        method: GET
+        url: /clusters/{{ .clusterId }}
+  - name: is_deleting
+    source:
+      expression: "clusterStatus.?deleted_time.hasValue()"
+
+resources:
+  - name: cluster_config
+    transport: remote-primary
+    manifest:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "{{ .clusterId }}-config"
+        namespace: default
+      data:
+        transport: remote
+    discovery:
+      namespace: default
+      by_name: "{{ .clusterId }}-config"
+    lifecycle:
+      delete:
+        when:
+          expression: "is_deleting"

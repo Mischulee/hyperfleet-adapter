@@ -1,3 +1,5 @@
+schema_version: "2.0"
+
 params:
   - name: "clusterId"
     source: "event.id"
@@ -23,8 +25,6 @@ params:
 
 resources:
   - name: namespace
-    transport:
-      client: "kubernetes"
     manifest:
       apiVersion: v1
       kind: Namespace
@@ -46,10 +46,8 @@ resources:
         when:
           expression: "is_deleting"
   - name: "helloWorldJob"
-    transport:
-      client: "kubernetes"
     manifest:
-      ref: "/etc/adapter/job.yaml"
+      ref: "job.yaml"
     discovery:
       namespace: '{{ .clusterId }}-k8s'
       by_selectors:
@@ -144,23 +142,30 @@ post:
                 is_deleting
                   && adapter.?executionStatus.orValue("") == "success"
                   && !adapter.?resourcesSkipped.orValue(false)
-                  && !resources.?namespace.hasValue()
+                  && resource_states.?namespace.orValue("") == "confirmed_deleted"
+                  && resource_states.?helloWorldJob.orValue("") == "confirmed_deleted"
                 ? "True"
                 : "False"
             reason:
               expression: |
                 !is_deleting
                 ? ""
-                : !resources.?namespace.hasValue()
-                  ? "CleanupConfirmed"
-                  : "CleanupInProgress"
+                : adapter.?executionStatus.orValue("") != "success"
+                  ? "AdapterUnhealthy"
+                  : resource_states.?namespace.orValue("") == "confirmed_deleted"
+                      && resource_states.?helloWorldJob.orValue("") == "confirmed_deleted"
+                    ? "CleanupConfirmed"
+                    : "CleanupInProgress"
             message:
               expression: |
                 !is_deleting
                 ? ""
-                : !resources.?namespace.hasValue()
-                  ? "All resources deleted; cleanup confirmed"
-                  : "Deletion in progress; waiting for namespace to be removed"
+                : adapter.?executionStatus.orValue("") != "success"
+                  ? "Cannot confirm cleanup while the adapter is unhealthy"
+                  : resource_states.?namespace.orValue("") == "confirmed_deleted"
+                      && resource_states.?helloWorldJob.orValue("") == "confirmed_deleted"
+                    ? "All resources deleted; cleanup confirmed"
+                    : "Deletion in progress; waiting for Job and Namespace confirmation"
         observed_generation:
           expression: "generation"
         observed_time: "{{ now | date \"2006-01-02T15:04:05Z07:00\" }}"

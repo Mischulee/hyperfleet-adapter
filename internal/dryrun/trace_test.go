@@ -10,6 +10,7 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/manifest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func makeTestTrace(status executor.ExecutionStatus, verbose bool) *ExecutionTrace {
@@ -59,6 +60,25 @@ func TestFormatText_Success(t *testing.T) {
 		assert.Contains(t, output, "Phase 4: Post Actions")
 		assert.Contains(t, output, "Result: SUCCESS")
 	})
+}
+
+func TestFormatText_ShowsRemoteTarget(t *testing.T) {
+	trace := makeTestTrace(executor.StatusSuccess, false)
+	trace.Result.ResourceResults = []executor.ResourceResult{
+		{Name: "remote", Kind: "ConfigMap", Namespace: "default", ResourceName: "remote-cm"},
+		{Name: "local", Kind: "ConfigMap", Namespace: "default", ResourceName: "local-cm"},
+	}
+	gvk := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+	trace.Transport.Records = []TransportRecord{
+		{Operation: operationApply, GVK: gvk, Namespace: "default", Name: "remote-cm",
+			TargetCluster: "cluster-x", TargetResource: "configmaps"},
+		{Operation: operationApply, GVK: gvk, Namespace: "default", Name: "local-cm"},
+	}
+
+	output := trace.FormatText()
+
+	assert.Equal(t, 1, strings.Count(output, "Target:"), "only the remote resource has a target")
+	assert.Contains(t, output, "Target: cluster cluster-x, resource configmaps")
 }
 
 func TestFormatText_Failed(t *testing.T) {

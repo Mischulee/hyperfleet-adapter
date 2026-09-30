@@ -1,0 +1,13 @@
+{
+  "abc123-config": {
+    "apiVersion": "v1",
+    "kind": "ConfigMap",
+    "metadata": {
+      "name": "abc123-config",
+      "namespace": "default"
+    },
+    "data": {
+      "transport": "remote"
+    }
+  }
+}

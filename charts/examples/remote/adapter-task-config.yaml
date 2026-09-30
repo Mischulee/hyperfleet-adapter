@@ -1,5 +1,5 @@
-# V2 task config. A resource with no transport uses local Kubernetes.
 schema_version: "2.0"
+
 params:
   - name: clusterId
     source: event.id
@@ -18,16 +18,13 @@ params:
       expression: "clusterStatus.?deleted_time.hasValue()"
 
 resources:
-  - name: namespace
+  - name: configMap
+    transport: remote-primary
     manifest:
-      apiVersion: v1
-      kind: Namespace
-      metadata:
-        name: "{{ .clusterId }}"
-        annotations:
-          hyperfleet.io/generation: "{{ .generation }}"
+      ref: configmap.yaml
     discovery:
-      by_name: "{{ .clusterId }}"
+      namespace: default
+      by_name: "{{ .clusterId }}-config"
     lifecycle:
       delete:
         when:
@@ -38,24 +35,51 @@ post:
     - name: clusterStatusPayload
       build:
         adapter: "{{ .adapter.name }}"
+        # Remote reads are tri-state. An unsynced or stale mirror is Unknown, not
+        # False: only a confirmed absence or a bad current status is False.
         conditions:
           - type: Applied
             status:
-              expression: 'resource_states.?namespace.orValue("") == "present" ? "True" : "False"'
+              expression: |
+                resource_states.?configMap.orValue("") == "present" ? "True"
+                  : resource_states.?configMap.orValue("") == "confirmed_deleted" ? "False"
+                  : "Unknown"
             reason:
-              expression: 'resource_states.?namespace.orValue("") == "present" ? "NamespaceApplied" : "NamespacePending"'
+              expression: |
+                resource_states.?configMap.orValue("") == "present" ? "ConfigMapObserved"
+                  : resource_states.?configMap.orValue("") == "confirmed_deleted" ? "ConfigMapNotFound"
+                  : "MirrorNotSynced"
             message:
               expression: |
-                resource_states.?namespace.orValue("") == "present"
-                  ? "Namespace applied" : "Namespace not applied yet"
+                resource_states.?configMap.orValue("") == "present"
+                  ? "ConfigMap read from the target cluster"
+                  : resource_states.?configMap.orValue("") == "confirmed_deleted"
+                    ? "ConfigMap is confirmed absent from the target cluster"
+                    : "Waiting for the target cluster mirror to sync"
           - type: Available
             status:
-              expression: 'resources.?namespace.?status.?phase.orValue("") == "Active" ? "True" : "False"'
+              expression: |
+                resource_states.?configMap.orValue("") == "confirmed_deleted" ? "False"
+                  : resource_states.?configMap.orValue("") == "present"
+                      && "hyperfleet.io/generation" in resources.configMap.?metadata.?annotations.orValue({})
+                      && resources.configMap.metadata.annotations["hyperfleet.io/generation"] == string(generation)
+                    ? "True" : "Unknown"
             reason:
-              expression: 'resources.?namespace.?status.?phase.orValue("") == "Active" ? "NamespaceActive" : "NamespaceNotActive"'
+              expression: |
+                resource_states.?configMap.orValue("") == "confirmed_deleted" ? "ConfigMapNotFound"
+                  : resource_states.?configMap.orValue("") == "present"
+                      && "hyperfleet.io/generation" in resources.configMap.?metadata.?annotations.orValue({})
+                      && resources.configMap.metadata.annotations["hyperfleet.io/generation"] == string(generation)
+                    ? "GenerationObserved" : "GenerationPending"
             message:
               expression: |
-                "Namespace phase: " + resources.?namespace.?status.?phase.orValue("unknown")
+                resource_states.?configMap.orValue("") == "confirmed_deleted"
+                  ? "ConfigMap is confirmed absent from the target cluster"
+                  : resource_states.?configMap.orValue("") == "present"
+                      && "hyperfleet.io/generation" in resources.configMap.?metadata.?annotations.orValue({})
+                      && resources.configMap.metadata.annotations["hyperfleet.io/generation"] == string(generation)
+                    ? "ConfigMap generation matches the requested generation"
+                    : "Waiting for the mirror to report the requested generation"
           - type: Health
             status:
               expression: |
@@ -85,22 +109,22 @@ post:
                 is_deleting
                   && adapter.?executionStatus.orValue("") == "success"
                   && !adapter.?resourcesSkipped.orValue(false)
-                  && resource_states.?namespace.orValue("") == "confirmed_deleted"
+                  && resource_states.?configMap.orValue("") == "confirmed_deleted"
                   ? "True" : "False"
             reason:
               expression: |
                 !is_deleting ? ""
                   : adapter.?executionStatus.orValue("") != "success" ? "AdapterUnhealthy"
-                  : resource_states.?namespace.orValue("") == "confirmed_deleted" ? "CleanupConfirmed"
+                  : resource_states.?configMap.orValue("") == "confirmed_deleted" ? "CleanupConfirmed"
                   : "CleanupInProgress"
             message:
               expression: |
                 !is_deleting ? ""
                   : adapter.?executionStatus.orValue("") != "success"
                     ? "Cannot confirm cleanup while the adapter is unhealthy"
-                    : resource_states.?namespace.orValue("") == "confirmed_deleted"
-                      ? "Namespace deletion confirmed"
-                      : "Waiting for confirmed Namespace deletion"
+                    : resource_states.?configMap.orValue("") == "confirmed_deleted"
+                      ? "ConfigMap deletion confirmed"
+                      : "Waiting for confirmed ConfigMap deletion"
         observed_generation:
           expression: generation
         observed_time: '{{ now | date "2006-01-02T15:04:05Z07:00" }}'

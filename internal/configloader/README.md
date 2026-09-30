@@ -69,7 +69,7 @@ resources: [...]
 post: {...}
 ```
 
-See `configs/adapter-task-config-template.yaml` for the complete configuration reference.
+See [`docs/configuration.md`](../../docs/configuration.md) for the deployment config reference and the [adapter authoring guide](../../docs/adapter-authoring-guide.md) for task config.
 
 ## Validation
 
@@ -189,11 +189,11 @@ capture:
       status.conditions.filter(c, c.type == "Reconciled").size() > 0
         ? status.conditions.filter(c, c.type == "Reconciled")[0].status
         : "False"
-  
+
   # JSONPath for complex extraction
   - name: "lzStatus"
     field: "{.items[?(@.adapter=='landing-zone-adapter')].data.namespace.status}"
-  
+
   # CEL expression
   - name: "activeCount"
     expression: "items.filter(i, i.status == 'active').size()"
@@ -213,12 +213,12 @@ Dynamic value definition for payload builds. Used when a field should be compute
 build:
   # Direct string (Go template supported)
   message: "Deployment successful"
-  
+
   # Field extraction with default
   errorMessage:
     field: "adapter.errorMessage"
     default: ""
-  
+
   # CEL expression with default
   isHealthy:
     expression: "resources.deployment.status.readyReplicas > 0"

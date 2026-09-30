@@ -89,6 +89,9 @@ type TraceTransportOp struct {
 	Namespace string `json:"namespace,omitempty"`
 	Name      string `json:"name"`
 	Result    string `json:"result,omitempty"`
+	// TargetCluster and TargetResource are empty for the local Kubernetes route.
+	TargetCluster  string `json:"targetCluster,omitempty"`
+	TargetResource string `json:"targetResource,omitempty"`
 }
 
 // FormatText formats the execution trace as human-readable text.
@@ -218,6 +221,13 @@ func (t *ExecutionTrace) FormatText() string {
 			}
 			fmt.Fprintf(&b, "  [%d/%d] %-30s %s\n", i+1, len(result.ResourceResults), rr.Name, status)
 			fmt.Fprintf(&b, "    Kind: %-12s Namespace: %-12s Name: %s\n", rr.Kind, rr.Namespace, rr.ResourceName)
+			for _, tr := range t.Transport.Records {
+				if tr.TargetCluster != "" && tr.GVK.Kind == rr.Kind &&
+					tr.Name == rr.ResourceName && tr.Namespace == rr.Namespace {
+					fmt.Fprintf(&b, "    Target: cluster %s, resource %s\n", tr.TargetCluster, tr.TargetResource)
+					break
+				}
+			}
 
 			if rr.DiscoveredState != nil && rr.DiscoveredState.Object != nil {
 				if stateBytes, err := json.Marshal(rr.DiscoveredState.Object); err == nil {
@@ -412,10 +422,12 @@ func (t *ExecutionTrace) FormatJSON() ([]byte, error) {
 	// Transport Operations
 	for _, rec := range t.Transport.Records {
 		op := TraceTransportOp{
-			Operation: rec.Operation,
-			Kind:      rec.GVK.Kind,
-			Namespace: rec.Namespace,
-			Name:      rec.Name,
+			Operation:      rec.Operation,
+			Kind:           rec.GVK.Kind,
+			Namespace:      rec.Namespace,
+			Name:           rec.Name,
+			TargetCluster:  rec.TargetCluster,
+			TargetResource: rec.TargetResource,
 		}
 		if rec.Result != nil {
 			op.Result = string(rec.Result.Operation)

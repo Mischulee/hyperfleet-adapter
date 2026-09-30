@@ -1,8 +1,10 @@
+schema_version: "2.0"
+
 # Task configuration demonstrating lifecycle.delete for Kubernetes transport.
 #
 # This example shows dependency-ordered deletion:
 #   1. configmap0 — deleted first (no dependencies)
-#   2. namespace0 — deleted only after configmap0 is gone (!resources.?configmap0.hasValue())
+#   2. namespace0 — deleted only after configmap0 is confirmed deleted
 #
 # The adapter detects pending deletion via the `deleted_time` field captured from the
 # HyperFleet API. When deleted_time is present, is_deleting evaluates to true and
@@ -45,8 +47,6 @@ params:
 resources:
   # Resource 0: ConfigMap — deleted first (no dependencies on other resources)
   - name: configmap0
-    transport:
-      client: kubernetes
     manifest:
       apiVersion: v1
       kind: ConfigMap
@@ -72,11 +72,9 @@ resources:
           expression: "is_deleting"
 
   # Resource 1: Namespace — deleted only after ConfigMap is gone.
-  # !resources.?configmap0.hasValue() is true once the ConfigMap's discovery returns
-  # NotFound (next reconciliation after configmap0 is actually deleted).
+  # configmap0 becomes confirmed_deleted once its discovery returns NotFound
+  # (next reconciliation after configmap0 is actually deleted).
   - name: namespace0
-    transport:
-      client: kubernetes
     manifest:
       apiVersion: v1
       kind: Namespace
@@ -99,7 +97,7 @@ resources:
           # Only delete the Namespace once the ConfigMap is confirmed gone.
           # This prevents the Namespace from being deleted while its ConfigMap
           # still exists, which would cause the ConfigMap to be orphaned.
-          expression: "is_deleting && !resources.?configmap0.hasValue()"
+          expression: 'is_deleting && resource_states.?configmap0.orValue("") == "confirmed_deleted"'
 
 post:
   payloads:
@@ -147,8 +145,8 @@ post:
                 is_deleting
                   && adapter.?executionStatus.orValue("") == "success"
                   && !adapter.?resourcesSkipped.orValue(false)
-                  && !resources.?configmap0.hasValue()
-                  && !resources.?namespace0.hasValue()
+                  && resource_states.?configmap0.orValue("") == "confirmed_deleted"
+                  && resource_states.?namespace0.orValue("") == "confirmed_deleted"
                 ? "True"
                 : "False"
             reason:
@@ -157,8 +155,8 @@ post:
                 ? ""
                 : adapter.?executionStatus.orValue("") != "success"
                   ? "AdapterUnhealthy"
-                  : !resources.?configmap0.hasValue()
-                      && !resources.?namespace0.hasValue()
+                  : resource_states.?configmap0.orValue("") == "confirmed_deleted"
+                      && resource_states.?namespace0.orValue("") == "confirmed_deleted"
                     ? "CleanupConfirmed"
                     : "CleanupInProgress"
             message:
@@ -167,8 +165,8 @@ post:
                 ? ""
                 : adapter.?executionStatus.orValue("") != "success"
                   ? "Cannot confirm cleanup while adapter is unhealthy"
-                  : !resources.?configmap0.hasValue()
-                      && !resources.?namespace0.hasValue()
+                  : resource_states.?configmap0.orValue("") == "confirmed_deleted"
+                      && resource_states.?namespace0.orValue("") == "confirmed_deleted"
                     ? "All resources deleted; cleanup confirmed"
                     : "Deletion in progress; waiting for resources to be removed"
 
@@ -179,9 +177,9 @@ post:
         data:
           deletion:
             configmapDeleted:
-              expression: "!resources.?configmap0.hasValue()"
+              expression: 'resource_states.?configmap0.orValue("") == "confirmed_deleted"'
             namespaceDeleted:
-              expression: "!resources.?namespace0.hasValue()"
+              expression: 'resource_states.?namespace0.orValue("") == "confirmed_deleted"'
 
   post_actions:
     - name: updateStatus

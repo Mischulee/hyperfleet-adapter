@@ -1,167 +1,20 @@
-# HyperFleet Adapter Deployment Configuration
-#
-# This file contains ONLY infrastructure and deployment-related settings:
-#   - Client connections (Maestro, HyperFleet API, Kubernetes)
-#   - Authentication and TLS configuration
-#   - Connection timeouts and retry policies
-#
-# NOTE: This is a SAMPLE configuration file for reference and local development.
-# It is NOT automatically packaged with the container image (see Dockerfile).
-#
-# In production, provide configuration via one of these methods:
-#   1. ADAPTER_CONFIG_PATH environment variable pointing to a config file (highest priority)
-#   2. ConfigMap mounted at /etc/adapter/config/adapter-deployment-config.yaml
-#
-# Example Kubernetes deployment:
-#   env:
-#     - name: ADAPTER_CONFIG_PATH
-#       value: /etc/adapter/config/adapter-deployment-config.yaml
-#   volumeMounts:
-#     - name: config
-#       mountPath: /etc/adapter/config
-#
-# For business logic configuration (params, preconditions, resources, post-actions),
-# use a separate business config file. See configs/adapter-task-config-template.yaml
-
+# Deployment config for a v2 task. Replace the API and broker endpoints.
 adapter:
-  name: hyperfleet-adapter
-  version: "0.1.0"
-
-# Log the full merged configuration after load (default: false)
-# Environment variable: HYPERFLEET_DEBUG_CONFIG
-# Flag: --debug-config
-debug_config: false
-
-# Named deployment transports and stores. These are infrastructure settings,
-# loaded with the deployment config (including Viper overrides); they do not
-# belong in the task configuration.
-#
-# A Kubernetes entry needs no store. A remote entry writes desires through a
-# named memory or Redis store. Names are stable registry keys, so multiple
-# entries can use the same transport or store type.
-#
-# Name rule: transport and store names are registry keys and should be
-# lowercase (a-z, 0-9, hyphen). Viper lowercases deployment map keys, and both
-# transport and store references are normalised to lowercase before lookup, so
-# a mixed-case reference still resolves to its declared transport or store.
-transports:
-  kubernetes:
-    type: kubernetes
-  remote:
-    type: remote
-    store: adapter-desires
-
-stores:
-  adapter-desires:
-    type: memory
-  # For Redis, replace the memory store above (or add another named store):
-  # redis-desires:
-  #   type: redis
-  #   url: "rediss://username:password@redis.example.com:6379/0"
-
-# Logging configuration
-# Priority: CLI flag > LOG_LEVEL/LOG_FORMAT/LOG_OUTPUT env vars > this file > defaults
+  name: example-adapter
+  version: "0.3.0"
 log:
-  # Log level: debug, info, warn, error (default: info)
-  # Environment variable: LOG_LEVEL
-  # Flag: --log-level
-  level: "info"
-
-  # Log format: text, json (default: json)
-  # Environment variable: LOG_FORMAT
-  # Flag: --log-format
-  format: "json"
-
-  # Log output: stdout, stderr (default: stdout)
-  # Environment variable: LOG_OUTPUT
-  # Flag: --log-output
-  output: "stdout"
-
-# Client configurations for external services
+  level: info
 clients:
-  # Maestro transport client configuration
-  maestro:
-    # gRPC server address
-    # Environment variable: HYPERFLEET_MAESTRO_GRPC_SERVER_ADDRESS
-    # Flag: --maestro-grpc-server-address
-    grpc_server_address: "maestro-grpc.maestro.svc.cluster.local:8090"
-
-    # HTTPS server address for REST API operations (optional)
-    # Environment variable: HYPERFLEET_MAESTRO_HTTP_SERVER_ADDRESS
-    http_server_address: "https://maestro-api.maestro.svc.cluster.local"
-
-    # Source identifier for CloudEvents routing (must be unique across adapters)
-    # Environment variable: HYPERFLEET_MAESTRO_SOURCE_ID
-    source_id: "hyperfleet-adapter"
-
-    # Client identifier (defaults to source_id if not specified)
-    # Environment variable: HYPERFLEET_MAESTRO_CLIENT_ID
-    client_id: "hyperfleet-adapter-client"
-
-    # Authentication configuration
-    auth:
-      type: "tls"  # TLS certificate-based mTLS
-
-      tls_config:
-        # gRPC TLS configuration
-        # Certificate paths (mounted from Kubernetes secrets)
-        # Environment variable: HYPERFLEET_MAESTRO_CA_FILE
-        ca_file: "/etc/maestro/certs/grpc/ca.crt"
-
-        # Environment variable: HYPERFLEET_MAESTRO_CERT_FILE
-        cert_file: "/etc/maestro/certs/grpc/client.crt"
-
-        # Environment variable: HYPERFLEET_MAESTRO_KEY_FILE
-        key_file: "/etc/maestro/certs/grpc/client.key"
-
-        # HTTP API TLS configuration (may use different CA than gRPC)
-        # If not set, falls back to ca_file for backwards compatibility
-        # Environment variable: HYPERFLEET_MAESTRO_HTTP_CA_FILE
-        http_ca_file: "/etc/maestro/certs/https/ca.crt"
-
-    # Connection settings
-    timeout: "30s"
-
-    # Timeout for the server healthiness check before starting (optional)
-    # Environment variable: HYPERFLEET_MAESTRO_SERVER_HEALTHINESS_TIMEOUT
-    # Flag: --maestro-server-healthiness-timeout
-    server_healthiness_timeout: "20s"
-
-    retry_attempts: 3
-
-    # Keep-alive for long-lived gRPC connections
-    keepalive:
-      time: "30s"
-      timeout: "10s"
-
-  # HyperFleet HTTP API client
   hyperfleet_api:
     base_url: http://hyperfleet-api:8000
     version: v1
-    timeout: 2s
-    retry_attempts: 3
-    retry_backoff: exponential
-    # Optional token-based authentication via a token file (e.g. Kubernetes projected service account token).
-    # When configured, the token is read from token_path and attached as Authorization: <scheme> <token>.
-    # scheme defaults to Bearer; set to ServiceAccount when fronted by a gateway that
-    # differentiates human-jwt callers from machine callers. token_path must be an absolute path.
-    # Environment variables: HYPERFLEET_API_AUTH_TOKEN_PATH, HYPERFLEET_API_AUTH_SCHEME, HYPERFLEET_API_AUTH_TOKEN_CACHE_TTL
-    # auth:
-    #   token_path: "/var/run/secrets/hyperfleet/token"
-    #   scheme: Bearer
-    #   token_cache_ttl: "30s"  # 0 = re-read on every request
-
-  # Broker consumer configuration (adapter-level)
+    timeout: 10s
   broker:
-    subscription_id: "my-adapter-subscription"
-    topic: "my-clusters-topic"
-
-  # Kubernetes client (for direct K8s resources)
+    subscription_id: CHANGE_ME
+    topic: CHANGE_ME
   kubernetes:
-    api_version: "v1"
-    # Uses in-cluster service account by default
-    # Set kube_config_path for out-of-cluster access
-    kube_config_path: PATH_TO_KUBECONFIG_FILE
-    # Optional rate limits (0 uses defaults)
-    qps: 100
-    burst: 200
+    api_version: v1
+
+# The local-only task in adapter-task-config-template.yaml needs no store or
+# named transport. For a remote task, add a shared store and named route as in
+# charts/examples/remote/adapter-config.yaml.

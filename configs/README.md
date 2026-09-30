@@ -1,4 +1,16 @@
-# Broker Configuration
+# Configuration templates
+
+## Adapter v2 skeleton
+
+[`adapter-config-template.yaml`](./adapter-config-template.yaml) and
+[`adapter-task-config-template.yaml`](./adapter-task-config-template.yaml) form
+a matching local Kubernetes example. The task uses the quoted
+`schema_version: "2.0"`; a resource without `transport` uses the local client.
+For named remote transports, see the [remote examples](../charts/examples/README.md).
+Task config is YAML only; deployment config supports environment and flag
+overrides.
+
+## Broker configuration
 
 This directory contains ConfigMap templates and examples for configuring the hyperfleet-adapter broker consumer.
 
@@ -213,4 +225,3 @@ pubsub.subscriptions.get
 - [Internal broker_consumer Package](../internal/broker_consumer/README.md)
 - [Integration Tests](../test/integration/broker_consumer/README.md)
 - [CloudEvents Specification](https://github.com/cloudevents/spec)
-

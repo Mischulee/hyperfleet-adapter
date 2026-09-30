@@ -1,0 +1,16 @@
+{
+  "abc123-config": {
+    "apiVersion": "v1",
+    "kind": "ConfigMap",
+    "metadata": {
+      "name": "abc123-config",
+      "namespace": "default",
+      "annotations": {
+        "hyperfleet.io/generation": "77"
+      }
+    },
+    "data": {
+      "cluster_id": "abc123"
+    }
+  }
+}

@@ -87,4 +87,6 @@ func TestBuildExecutor_DryRunNamedRemoteTransport(t *testing.T) {
 	require.Equal(t, executor.StatusSuccess, result.Status)
 	require.Len(t, recorder.Records, 1)
 	require.Equal(t, "apply", recorder.Records[0].Operation)
+	require.Equal(t, "cluster-1", recorder.Records[0].TargetCluster)
+	require.Equal(t, "configmaps", recorder.Records[0].TargetResource)
 }

@@ -1,16 +1,12 @@
 adapterConfig:
   create: true
   files:
-    adapter-config.yaml: examples/kubernetes/adapter-config.yaml
-  log:
-    level: info
-
+    adapter-config.yaml: examples/remote/adapter-config.yaml
 adapterTaskConfig:
   create: true
   files:
-    task-config.yaml: examples/kubernetes/adapter-task-config.yaml
-    job.yaml: examples/kubernetes/job.yaml
-
+    task-config.yaml: examples/remote/adapter-task-config.yaml
+    configmap.yaml: examples/remote/configmap.yaml
 broker:
   create: true
   type: googlepubsub
@@ -19,14 +15,8 @@ broker:
     subscriptionId: CHANGE_ME
     topic: CHANGE_ME
     deadLetterTopic: CHANGE_ME
-
 image:
   registry: CHANGE_ME
   repository: hyperfleet-adapter
   pullPolicy: Always
   tag: latest
-
-rbac:
-  resources:
-    - namespaces
-    - jobs
