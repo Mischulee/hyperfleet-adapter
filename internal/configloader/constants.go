@@ -83,11 +83,18 @@ const (
 
 // Transport field names
 const (
-	FieldTransport = "transport"
+	FieldTransport     = "transport"
+	FieldClient        = "client"
+	FieldMaestro       = "maestro"
+	FieldTargetCluster = "target_cluster"
 )
 
-// TransportClientKubernetes is the reserved name of the local Kubernetes transport.
-const TransportClientKubernetes = "kubernetes"
+// Transport client types
+// TODO(HYPERFLEET-1504): drop TransportClientMaestro and the client/maestro field names.
+const (
+	TransportClientKubernetes = "kubernetes"
+	TransportClientMaestro    = "maestro"
+)
 
 // Deployment transport types.
 const (

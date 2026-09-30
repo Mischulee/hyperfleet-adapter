@@ -49,7 +49,7 @@ func TestResourceExecutor_ResolveTransport(t *testing.T) {
 	execCtx := NewExecutionContext(t.Context(), nil, nil)
 	execCtx.Params["clusterName"] = "cluster-1"
 	resource := namedRemoteResource(&configloader.DiscoveryConfig{ByName: "test-config"})
-	resource.Transport = new("Remote-Primary")
+	resource.Transport = configloader.NamedTransport("Remote-Primary")
 	client, target, err := re.resolveTransport(resource, execCtx)
 	require.NoError(t, err)
 	assert.Same(t, remote, client)
@@ -61,7 +61,7 @@ func TestResourceExecutor_ResolveTransport(t *testing.T) {
 	assert.Same(t, local, client)
 	assert.Nil(t, target)
 
-	resource.Transport = new("remote-primary")
+	resource.Transport = configloader.NamedTransport("remote-primary")
 	definition.TargetCluster = "{{ .missing }}"
 	re.config.Transports["remote-primary"] = definition
 	_, _, err = re.resolveTransport(resource, execCtx)
@@ -75,13 +75,30 @@ func TestResourceExecutor_ResolveTransport(t *testing.T) {
 	}
 }
 
+func TestResourceExecutor_ResolveTransport_RejectsCustomMaestroName(t *testing.T) {
+	re := newResourceExecutor(&ExecutorConfig{
+		Config: &configloader.Config{Transports: map[string]configloader.TransportDefinition{
+			configloader.TransportClientMaestro: {Type: configloader.TransportTypeRemote},
+		}},
+	})
+
+	client, target, err := re.resolveTransport(configloader.Resource{
+		Transport: configloader.NamedTransport(configloader.TransportClientMaestro),
+	}, NewExecutionContext(context.Background(), nil, nil))
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, `transport name "maestro" is reserved for the built-in maestro transport`)
+	assert.Nil(t, client)
+	assert.Nil(t, target)
+}
+
 func TestResourceExecutor_ExecuteAll_UnknownTransport(t *testing.T) {
 	re := newResourceExecutor(&ExecutorConfig{
 		TransportRegistry: testTransportRegistry(k8sclient.NewMockK8sClient()),
 	})
 	resource := configloader.Resource{
 		Name:      "test-resource",
-		Transport: new("missing-transport"),
+		Transport: configloader.NamedTransport("missing-transport"),
 	}
 
 	_, err := re.ExecuteAll(
@@ -109,7 +126,7 @@ func newNamedRemoteResourceExecutor(remote, fallback transportclient.TransportCl
 func namedRemoteResource(discovery *configloader.DiscoveryConfig) configloader.Resource {
 	return configloader.Resource{
 		Name:      "test-resource",
-		Transport: new("remote-primary"),
+		Transport: configloader.NamedTransport("remote-primary"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -277,7 +294,7 @@ func TestResourceExecutor_OneRemoteRouteMapsTwoKindsAcrossLifecycle(t *testing.T
 		When: &configloader.LifecycleWhen{Expression: "true"},
 	}}
 	namespace := configloader.Resource{
-		Name: "namespace", Transport: new("remote-primary"),
+		Name: "namespace", Transport: configloader.NamedTransport("remote-primary"),
 		Manifest:  map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": "test-ns"}},
 		Discovery: &configloader.DiscoveryConfig{ByName: "test-ns"},
 		Lifecycle: &configloader.ResourceLifecycle{Create: &configloader.LifecycleCreate{
@@ -664,7 +681,7 @@ func TestResourceExecutor_ExecuteAll_DiscoveryFailure(t *testing.T) {
 
 	resource := configloader.Resource{
 		Name:      "test-resource",
-		Transport: new("kubernetes"),
+		Transport: configloader.NamedTransport("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -765,7 +782,7 @@ func TestResourceExecutor_ExecuteAll_StoresNestedDiscoveriesByName(t *testing.T)
 
 	resource := configloader.Resource{
 		Name:      "resource0",
-		Transport: new("kubernetes"),
+		Transport: configloader.NamedTransport("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "work.open-cluster-management.io/v1",
 			"kind":       "ManifestWork",
@@ -835,7 +852,7 @@ func runNestedDiscoveryExecuteAll(
 	ns := parent.GetNamespace()
 	resource := configloader.Resource{
 		Name:      "resource0",
-		Transport: new("kubernetes"),
+		Transport: configloader.NamedTransport("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": parent.GetAPIVersion(),
 			"kind":       parent.GetKind(),
@@ -1350,7 +1367,7 @@ func TestStaticGVK_StringManifest(t *testing.T) {
 func newResourceWithLifecycle(expression, propagationPolicy string) configloader.Resource {
 	r := configloader.Resource{
 		Name:      "test-resource",
-		Transport: new("kubernetes"),
+		Transport: configloader.NamedTransport("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -1379,7 +1396,7 @@ func newResourceWithLifecycle(expression, propagationPolicy string) configloader
 func newResourceWithLifecycleCreate(expression string) configloader.Resource {
 	r := configloader.Resource{
 		Name:      "test-resource",
-		Transport: new("kubernetes"),
+		Transport: configloader.NamedTransport("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -1580,7 +1597,7 @@ func TestResourceExecutor_LifecycleCreate_Absent_NormalApply(t *testing.T) {
 
 	resource := configloader.Resource{
 		Name:      "test-resource",
-		Transport: new("kubernetes"),
+		Transport: configloader.NamedTransport("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -1839,7 +1856,7 @@ func TestResourceExecutor_LifecycleDelete_NoLifecycle_NormalApply(t *testing.T) 
 
 	resource := configloader.Resource{
 		Name:      "test-resource",
-		Transport: new("kubernetes"),
+		Transport: configloader.NamedTransport("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -1909,7 +1926,7 @@ func TestResourceExecutor_LifecycleDelete_OrderingViaResources_InstantDelete(t *
 
 	clusterJob := configloader.Resource{
 		Name:      "clusterJob",
-		Transport: new("kubernetes"),
+		Transport: configloader.NamedTransport("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "batch/v1",
 			"kind":       "Job",
@@ -1926,7 +1943,7 @@ func TestResourceExecutor_LifecycleDelete_OrderingViaResources_InstantDelete(t *
 
 	clusterConfigMap := configloader.Resource{
 		Name:      "clusterConfigMap",
-		Transport: new("kubernetes"),
+		Transport: configloader.NamedTransport("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -1985,7 +2002,7 @@ func TestResourceExecutor_LifecycleDelete_OrderingViaResources_WithFinalizers(t 
 
 	clusterJob := configloader.Resource{
 		Name:      "clusterJob",
-		Transport: new("kubernetes"),
+		Transport: configloader.NamedTransport("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "batch/v1",
 			"kind":       "Job",
@@ -2002,7 +2019,7 @@ func TestResourceExecutor_LifecycleDelete_OrderingViaResources_WithFinalizers(t 
 
 	clusterConfigMap := configloader.Resource{
 		Name:      "clusterConfigMap",
-		Transport: new("kubernetes"),
+		Transport: configloader.NamedTransport("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -2059,7 +2076,7 @@ func TestResourceExecutor_LifecycleDelete_OrderingSecondReconciliation(t *testin
 
 	clusterJob := configloader.Resource{
 		Name:      "clusterJob",
-		Transport: new("kubernetes"),
+		Transport: configloader.NamedTransport("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "batch/v1",
 			"kind":       "Job",
@@ -2074,7 +2091,7 @@ func TestResourceExecutor_LifecycleDelete_OrderingSecondReconciliation(t *testin
 	}
 	clusterConfigMap := configloader.Resource{
 		Name:      "clusterConfigMap",
-		Transport: new("kubernetes"),
+		Transport: configloader.NamedTransport("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -2141,6 +2158,66 @@ func TestResourceExecutor_LifecycleDelete_DeleteError(t *testing.T) {
 	assert.Equal(t, string(PhaseResources), execCtx.Adapter.ExecutionError.Phase)
 	require.NotNil(t, execCtx.Adapter.ResourceErrors, "ResourceErrors map should be populated")
 	assert.Contains(t, execCtx.Adapter.ResourceErrors, resource.Name, "resource error should be keyed by resource name")
+}
+
+func TestResourceExecutor_LifecycleDelete_Maestro_AsyncDeletion(t *testing.T) {
+	// Maestro transport: when.expression is true → delete is sent with a non-nil TransportContext.
+	// Maestro deletion is async: the resource stays discoverable (deletionTimestamp set, not removed).
+	// Post-delete rediscovery still finds the resource → stored as non-nil → dependents wait.
+	discovered := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "work.open-cluster-management.io/v1",
+			"kind":       "ManifestWork",
+			"metadata":   map[string]interface{}{"name": "cluster-1-work", "namespace": "cluster-1"},
+		},
+	}
+
+	// keepOnDeleteMockClient does NOT remove from Resources on delete — simulates Maestro async cleanup.
+	mock := &keepOnDeleteMockClient{MockK8sClient: k8sclient.NewMockK8sClient()}
+	mock.Resources["cluster-1/cluster-1-work"] = discovered
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportRegistry: transportclient.Registry{configloader.TransportClientMaestro: mock},
+	})
+
+	resource := configloader.Resource{
+		Name: "clusterWork",
+		Transport: &configloader.ResourceTransport{
+			Name:    "maestro",
+			Maestro: &configloader.MaestroTransportConfig{TargetCluster: "cluster-1"},
+		},
+		Manifest: map[string]interface{}{
+			"apiVersion": "work.open-cluster-management.io/v1",
+			"kind":       "ManifestWork",
+			"metadata":   map[string]interface{}{"name": "cluster-1-work", "namespace": "cluster-1"},
+		},
+		Discovery: &configloader.DiscoveryConfig{Namespace: "cluster-1", ByName: "cluster-1-work"},
+		Lifecycle: &configloader.ResourceLifecycle{
+			Delete: &configloader.LifecycleDelete{
+				When: &configloader.LifecycleWhen{Expression: "deleted_time != null"},
+			},
+		},
+	}
+
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx.Params["deleted_time"] = testDeletedTime
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{resource}, execCtx)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, StatusSuccess, results[0].Status)
+	assert.Equal(t, manifest.OperationDelete, results[0].Operation)
+
+	// Maestro transport must pass a non-nil TransportContext to DeleteResource.
+	assert.NotNil(t, mock.DeleteCalledWithTarget,
+		"Maestro transport must supply a non-nil TransportContext to DeleteResource")
+
+	// Resource stays non-nil in context: async cleanup → dependents wait for next reconciliation.
+	storedVal, exists := execCtx.Resources["clusterWork"]
+	assert.True(t, exists, "resource key must be present in execCtx after Maestro delete")
+	assert.NotNil(t, storedVal,
+		"non-nil stored: Maestro deletion is async — dependents must wait for next reconciliation")
 }
 
 // keepOnDeleteMockClient wraps MockK8sClient but intentionally does NOT remove resources on
@@ -2324,7 +2401,7 @@ func TestResourceExecutor_LifecycleDelete_DeleteConfigNil(t *testing.T) {
 
 	resource := configloader.Resource{
 		Name:      "test-resource",
-		Transport: new("kubernetes"),
+		Transport: configloader.NamedTransport("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -2564,7 +2641,7 @@ func TestResourceExecutor_LifecycleDelete_BySelectors(t *testing.T) {
 
 	resource := configloader.Resource{
 		Name:      "test-resource",
-		Transport: new("kubernetes"),
+		Transport: configloader.NamedTransport("kubernetes"),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
@@ -2895,7 +2972,7 @@ func newDesireExecutor(store desire.SpecStore) *ResourceExecutor {
 func newDesireResourceWithLifecycle(expression, propagationPolicy string) configloader.Resource {
 	r := configloader.Resource{
 		Name:      "test-resource",
-		Transport: new(desireTransportName),
+		Transport: configloader.NamedTransport(desireTransportName),
 		Manifest: map[string]interface{}{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",

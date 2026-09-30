@@ -497,15 +497,22 @@ func (c *Condition) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	return nil
 }
 
+// MaestroTransportConfig contains maestro-specific transport settings
+// TODO(HYPERFLEET-1504): remove with the Maestro transport.
+type MaestroTransportConfig struct {
+	// TargetCluster is the name of the target cluster (consumer) for ManifestWork delivery
+	TargetCluster string `yaml:"target_cluster" validate:"required"`
+}
+
 // Resource represents a resource configuration.
 // Transport names a deployment transport; omission selects local Kubernetes.
 // Manifest holds the Kubernetes resource delivered through that transport.
 type Resource struct {
 	Name string `yaml:"name" validate:"required,resourcename"`
 	// Transport references a named deployment route; omission uses local Kubernetes.
-	Transport *string          `yaml:"transport,omitempty"`
-	Manifest  interface{}      `yaml:"manifest,omitempty"`
-	Discovery *DiscoveryConfig `yaml:"discovery,omitempty" validate:"required"`
+	Transport *ResourceTransport `yaml:"transport,omitempty"`
+	Manifest  interface{}        `yaml:"manifest,omitempty"`
+	Discovery *DiscoveryConfig   `yaml:"discovery,omitempty" validate:"required"`
 	// NestedDiscoveries defines how to discover sub-resources of the applied resource.
 	// Lifecycle defines the resource lifecycle behavior, including deletion triggers and policy.
 	// If not set, the resource uses the default apply-only behavior.

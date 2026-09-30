@@ -34,6 +34,7 @@ type ApplyResult struct {
 // Each transport client defines its own concrete context type and type-asserts:
 //   - k8sclient: ignores it (nil)
 //   - maestroclient: expects *maestroclient.TransportContext with ConsumerName
+//   - desireclient: expects *desireclient.TransportContext with ManagementCluster and Resource
 //
 // This is typed as `any` to allow each backend to define its own context shape.
 type TransportContext = any

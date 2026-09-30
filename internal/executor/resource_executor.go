@@ -12,6 +12,7 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/configloader"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/criteria"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/desireclient"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/maestroclient"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/manifest"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/transportclient"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/metrics"
@@ -643,9 +644,24 @@ func (re *ResourceExecutor) resolveTransport(
 	if re.config != nil {
 		definition, configured = configloader.TransportDefinitionByName(re.config.Transports, transportName)
 	}
+	// TODO(HYPERFLEET-1504): remove the maestro route with the Maestro transport.
+	if transportName == configloader.TransportClientMaestro && configured {
+		return nil, nil, fmt.Errorf("transport name %q is reserved for the built-in maestro transport", transportName)
+	}
 	client, err := re.registry.Get(transportName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get transport client %q: %w", transportName, err)
+	}
+
+	if transportName == configloader.TransportClientMaestro {
+		if resource.Transport == nil || resource.Transport.Maestro == nil {
+			return nil, nil, fmt.Errorf("maestro transport config is required")
+		}
+		targetCluster, templateErr := utils.RenderTemplate(resource.Transport.Maestro.TargetCluster, execCtx.Params)
+		if templateErr != nil {
+			return nil, nil, fmt.Errorf("render maestro target cluster: %w", templateErr)
+		}
+		return client, &maestroclient.TransportContext{ConsumerName: targetCluster}, nil
 	}
 
 	if !configured || definition.Type != configloader.TransportTypeRemote {

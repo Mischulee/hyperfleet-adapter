@@ -294,7 +294,7 @@ func desireDiscoveryConfig() *configloader.Config {
 					"annotations": map[string]interface{}{constants.AnnotationGeneration: "1"},
 				},
 			},
-			Transport: new(desireDiscoveryTransport),
+			Transport: configloader.NamedTransport(desireDiscoveryTransport),
 			Discovery: &configloader.DiscoveryConfig{
 				Namespace: desireDiscoveryIdentity.Namespace,
 				ByName:    desireDiscoveryIdentity.Name,

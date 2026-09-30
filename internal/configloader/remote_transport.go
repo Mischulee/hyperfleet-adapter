@@ -118,12 +118,6 @@ func (d TransportDefinition) PluralForGVK(gvk schema.GroupVersionKind) (string, 
 // ValidateResourceTransports checks cross-file routing after manifest refs load.
 // These are structural safety checks and also run when semantic checks are skipped.
 func ValidateResourceTransports(adapter *AdapterConfig, task *AdapterTaskConfig) error {
-	// Resources can no longer select Maestro, so a configured Maestro client
-	// would leave every resource without a working transport.
-	if adapter.Clients.Maestro != nil && len(task.Resources) > 0 {
-		return fmt.Errorf("clients.maestro can no longer deliver resources; " +
-			"remove it and route resources through local Kubernetes or named transports")
-	}
 	available := utils.SortedMapKeys(adapter.Transports)
 	if !slices.ContainsFunc(available, func(name string) bool {
 		return NormalizeRegistryName(name) == TransportClientKubernetes
@@ -136,6 +130,15 @@ func ValidateResourceTransports(adapter *AdapterConfig, task *AdapterTaskConfig)
 		path := fmt.Sprintf("resources[%d]", i)
 		if resource.Manifest == nil {
 			return fmt.Errorf("%s.manifest is required", path)
+		}
+		if resource.Transport != nil && resource.Transport.Legacy {
+			maestro, err := validateLegacyTransport(adapter, task, resource, path, vars)
+			if err != nil {
+				return err
+			}
+			if maestro {
+				continue
+			}
 		}
 		name := resource.GetTransportName()
 		if NormalizeRegistryName(name) == "" {

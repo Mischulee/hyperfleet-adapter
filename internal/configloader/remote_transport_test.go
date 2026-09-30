@@ -206,7 +206,7 @@ resources:
 		{
 			name: "legacy block", adapter: remoteAdapterYAML,
 			task: replaceTask("transport: Remote-Primary", "transport: {client: remote-primary}"),
-			want: "cannot unmarshal !!map",
+			want: `the object form is not supported with schema_version "2.0"`,
 		},
 		{
 			name: "colliding GVK keys",
@@ -217,21 +217,6 @@ resources:
 		{
 			name: "reserved local name", adapter: replaceAdapter("remote-primary:", "kubernetes:"),
 			task: remoteTaskYAML, want: "name kubernetes is reserved for local Kubernetes",
-		},
-		{
-			name: "v2 task with legacy client",
-			adapter: "adapter:\n  name: test-adapter\nclients:\n  maestro:\n" +
-				"    http_server_address: localhost:8080\n",
-			task: strings.Replace(remoteTaskYAML, "    transport: Remote-Primary\n", "", 1),
-			want: "clients.maestro can no longer deliver resources",
-		},
-		{
-			name: "unversioned task with legacy client",
-			adapter: "adapter:\n  name: test-adapter\nclients:\n  maestro:\n" +
-				"    http_server_address: localhost:8080\n",
-			task: strings.Replace(strings.Replace(remoteTaskYAML, "schema_version: \"2.0\"\n", "", 1),
-				"    transport: Remote-Primary\n", "", 1),
-			want: "clients.maestro can no longer deliver resources",
 		},
 	}
 	for _, tc := range cases {
@@ -298,7 +283,7 @@ func TestValidateConfigRoutingRejectsRemoteDeleteWithoutByName(t *testing.T) {
 				}},
 				Resources: []Resource{{
 					Name:      "configMap",
-					Transport: new("remote-primary"),
+					Transport: NamedTransport("remote-primary"),
 					Manifest:  map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap"},
 					Discovery: discovery,
 					Lifecycle: &ResourceLifecycle{Delete: &LifecycleDelete{}},

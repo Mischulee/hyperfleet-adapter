@@ -483,7 +483,7 @@ func TestBuildRejectsInvalidNamedTransportBeforeStartingService(t *testing.T) {
 				},
 				Resources: []configloader.Resource{{
 					Name:      "namespace",
-					Transport: new("remote"),
+					Transport: configloader.NamedTransport("remote"),
 					Manifest:  map[string]interface{}{"apiVersion": "v1", "kind": "Namespace"},
 				}},
 			},
@@ -513,12 +513,11 @@ func TestBuildRejectsInvalidNamedTransportBeforeStartingService(t *testing.T) {
 			want: "failed to load kubeconfig",
 		},
 		{
-			name: "Maestro client with resources and no transports",
+			name: "Maestro resource without a Maestro client",
 			config: &configloader.Config{
-				Clients:   configloader.ClientsConfig{Maestro: new(configloader.MaestroClientConfig)},
-				Resources: []configloader.Resource{{Name: "local", Manifest: testConfigMapManifestMap()}},
+				Resources: []configloader.Resource{legacyMaestroResource()},
 			},
-			want: "clients.maestro can no longer deliver resources",
+			want: "clients.maestro is not configured",
 		},
 	}
 
@@ -659,11 +658,15 @@ func TestBuildRecordingWithoutTransports(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, runtime.Registry)
 
-	_, err = BuildRecording(&configloader.Config{
+	runtime, err = BuildRecording(&configloader.Config{
 		Clients:   configloader.ClientsConfig{Maestro: new(configloader.MaestroClientConfig)},
 		Resources: []configloader.Resource{{Name: "local", Manifest: testConfigMapManifestMap()}},
 	}, recorder)
-	require.ErrorContains(t, err, "clients.maestro can no longer deliver resources")
+	require.NoError(t, err, "a Maestro client may also serve local resources")
+	_, err = runtime.Registry.Get(configloader.TransportClientKubernetes)
+	require.NoError(t, err)
+	_, err = runtime.Registry.Get(configloader.TransportClientMaestro)
+	require.Error(t, err, "no resource uses Maestro")
 }
 
 func loadRuntimeConfig(t *testing.T, adapterYAML string) *configloader.Config {
@@ -753,7 +756,7 @@ func TestBuildSharesClientAcrossNamedKubernetesTransports(t *testing.T) {
 			"local-secondary": {Type: configloader.TransportTypeKubernetes},
 		},
 		Resources: []configloader.Resource{
-			{Name: "named-local", Transport: new("local-primary"), Manifest: testConfigMapManifestMap()},
+			{Name: "named-local", Transport: configloader.NamedTransport("local-primary"), Manifest: testConfigMapManifestMap()},
 			{Name: "default-local", Manifest: testConfigMapManifestMap()},
 		},
 	}
@@ -782,7 +785,11 @@ func testRemoteDefinition(store string) configloader.TransportDefinition {
 }
 
 func testRemoteResource(name, transport string) configloader.Resource {
-	return configloader.Resource{Name: name, Transport: new(transport), Manifest: testConfigMapManifestMap()}
+	return configloader.Resource{
+		Name:      name,
+		Transport: configloader.NamedTransport(transport),
+		Manifest:  testConfigMapManifestMap(),
+	}
 }
 
 func testConfigMapManifestMap() map[string]interface{} {
@@ -815,4 +822,40 @@ users:
       token: test-token
 `), 0644))
 	return kubeconfigPath
+}
+
+func legacyMaestroResource() configloader.Resource {
+	return configloader.Resource{
+		Name: "work",
+		Transport: &configloader.ResourceTransport{
+			Name:    configloader.TransportClientMaestro,
+			Maestro: &configloader.MaestroTransportConfig{TargetCluster: "cluster-1"},
+			Legacy:  true,
+		},
+		Manifest: testConfigMapManifestMap(),
+	}
+}
+
+func TestBuildRecordingRegistersLegacyMaestroWhenReferenced(t *testing.T) {
+	config := &configloader.Config{
+		Clients:   configloader.ClientsConfig{Maestro: &configloader.MaestroClientConfig{SourceID: "test-adapter"}},
+		Resources: []configloader.Resource{legacyMaestroResource()},
+	}
+	recorder := dryrun.NewDryrunTransportClient()
+	runtime, err := BuildRecording(config, recorder)
+	require.NoError(t, err)
+	client, err := runtime.Registry.Get(configloader.TransportClientMaestro)
+	require.NoError(t, err)
+	assert.Same(t, recorder, client)
+	_, err = runtime.Registry.Get(configloader.TransportClientKubernetes)
+	require.Error(t, err, "no resource uses local Kubernetes")
+}
+
+func TestBuildRejectsInvalidMaestroConfiguration(t *testing.T) {
+	runtime, err := Build(t.Context(), &configloader.Config{
+		Clients:   configloader.ClientsConfig{Maestro: &configloader.MaestroClientConfig{Timeout: "not-a-duration"}},
+		Resources: []configloader.Resource{legacyMaestroResource()},
+	})
+	require.ErrorContains(t, err, "invalid maestro timeout")
+	assert.Nil(t, runtime)
 }

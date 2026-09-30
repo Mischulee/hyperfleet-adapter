@@ -65,7 +65,7 @@ func TestBuildExecutor_DryRunNamedRemoteTransport(t *testing.T) {
 		},
 		Resources: []configloader.Resource{{
 			Name:      "test-resource",
-			Transport: new("remote-primary"),
+			Transport: configloader.NamedTransport("remote-primary"),
 			Manifest: map[string]interface{}{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",

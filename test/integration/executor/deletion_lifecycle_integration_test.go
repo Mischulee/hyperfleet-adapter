@@ -94,7 +94,7 @@ func TestAlreadyCleanedResourceAllowsDependentDeleteAndFinalizationCEL(t *testin
 				},
 			},
 		},
-		Transport: new(desireDiscoveryTransport),
+		Transport: configloader.NamedTransport(desireDiscoveryTransport),
 		Discovery: &configloader.DiscoveryConfig{
 			Namespace: dependentIdentity.Namespace,
 			ByName:    dependentIdentity.Name,
@@ -265,7 +265,7 @@ func deletionChainConfig(order []deletionChainResource, useStates bool) *configl
 		config.Resources = append(config.Resources, configloader.Resource{
 			Name:      r.alias,
 			Manifest:  deletionChainManifest(r.name),
-			Transport: new(desireDiscoveryTransport),
+			Transport: configloader.NamedTransport(desireDiscoveryTransport),
 			Discovery: &configloader.DiscoveryConfig{Namespace: desireDiscoveryIdentity.Namespace, ByName: r.name},
 			Lifecycle: &configloader.ResourceLifecycle{Delete: &configloader.LifecycleDelete{
 				When: &configloader.LifecycleWhen{Expression: strings.Join(gate, " && ")},
