@@ -151,14 +151,21 @@ func LoadConfig(opts ...LoadOption) (*Config, error) {
 	}
 
 	// Validate and load file references in task config
-	if taskBaseDir != "" {
-		if err := taskValidator.ValidateFileReferences(); err != nil {
-			return nil, fmt.Errorf("task config file reference validation failed: %w", err)
-		}
+	if err := taskValidator.ValidateFileReferences(); err != nil {
+		return nil, fmt.Errorf("task config file reference validation failed: %w", err)
+	}
 
-		if err := loadTaskConfigFileReferences(taskCfg, taskBaseDir); err != nil {
-			return nil, fmt.Errorf("failed to load task config file references: %w", err)
-		}
+	if err := loadTaskConfigFileReferences(taskCfg, taskBaseDir); err != nil {
+		return nil, fmt.Errorf("failed to load task config file references: %w", err)
+	}
+
+	// 3. Merge into unified Config and validate cross-file routing
+	config := Merge(adapterCfg, taskCfg)
+	if config == nil {
+		return nil, fmt.Errorf("failed to merge configurations")
+	}
+	if err := ValidateResourceTransports(config); err != nil {
+		return nil, fmt.Errorf("resource transport validation failed: %w", err)
 	}
 
 	// Semantic validation for task config (optional)
@@ -171,12 +178,6 @@ func LoadConfig(opts ...LoadOption) (*Config, error) {
 		}
 	}
 
-	// 3. Merge into unified Config
-	config := Merge(adapterCfg, taskCfg)
-	if config == nil {
-		return nil, fmt.Errorf("failed to merge configurations")
-	}
-
 	return config, nil
 }
 
@@ -186,6 +187,10 @@ func LoadConfig(opts ...LoadOption) (*Config, error) {
 
 // loadTaskConfigFileReferences loads content from file references into the task config
 func loadTaskConfigFileReferences(config *AdapterTaskConfig, baseDir string) error {
+	if baseDir == "" {
+		return nil
+	}
+
 	// Load manifest.ref in resources as raw strings to support Go template syntax.
 	// Files are stored as raw strings so that structural Go templates ({{ if }}, {{ range }}, etc.)
 	// are preserved and rendered at execution time before YAML parsing.

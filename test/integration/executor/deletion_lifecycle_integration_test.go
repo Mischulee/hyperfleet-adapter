@@ -94,13 +94,7 @@ func TestAlreadyCleanedResourceAllowsDependentDeleteAndFinalizationCEL(t *testin
 				},
 			},
 		},
-		Transport: &configloader.TransportConfig{
-			Client: desireDiscoveryTransport,
-			Desire: &configloader.DesireTransportConfig{
-				TargetCluster: dependentIdentity.ManagementCluster,
-				Resource:      dependentIdentity.Resource,
-			},
-		},
+		Transport: configloader.NamedTransport(desireDiscoveryTransport),
 		Discovery: &configloader.DiscoveryConfig{
 			Namespace: dependentIdentity.Namespace,
 			ByName:    dependentIdentity.Name,
@@ -259,7 +253,7 @@ func deletionChainConfig(order []deletionChainResource, useStates bool) *configl
 	config := &configloader.Config{
 		Adapter: configloader.AdapterInfo{Name: "deletion-chain-test"},
 		Transports: map[string]configloader.TransportDefinition{
-			desireDiscoveryTransport: {Type: configloader.TransportTypeRemote},
+			desireDiscoveryTransport: desireDiscoveryDefinition(),
 		},
 	}
 	finalized := []string{isDeleting, `adapter.?executionStatus.orValue("") == "success"`}
@@ -269,15 +263,9 @@ func deletionChainConfig(order []deletionChainResource, useStates bool) *configl
 			gate = append(gate, absent(dependency))
 		}
 		config.Resources = append(config.Resources, configloader.Resource{
-			Name:     r.alias,
-			Manifest: deletionChainManifest(r.name),
-			Transport: &configloader.TransportConfig{
-				Client: desireDiscoveryTransport,
-				Desire: &configloader.DesireTransportConfig{
-					TargetCluster: desireDiscoveryIdentity.ManagementCluster,
-					Resource:      desireDiscoveryIdentity.Resource,
-				},
-			},
+			Name:      r.alias,
+			Manifest:  deletionChainManifest(r.name),
+			Transport: configloader.NamedTransport(desireDiscoveryTransport),
 			Discovery: &configloader.DiscoveryConfig{Namespace: desireDiscoveryIdentity.Namespace, ByName: r.name},
 			Lifecycle: &configloader.ResourceLifecycle{Delete: &configloader.LifecycleDelete{
 				When: &configloader.LifecycleWhen{Expression: strings.Join(gate, " && ")},

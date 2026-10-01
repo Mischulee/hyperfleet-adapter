@@ -87,13 +87,19 @@ func ValidateTransportNameCollisions(transports map[string]TransportDefinition) 
 // validateRegistryNameCollisions rejects map keys that normalise to the same
 // canonical registry name.
 func validateRegistryNameCollisions[V any](field string, entries map[string]V) error {
+	return validateCollisions(field, "name", entries)
+}
+
+// validateCollisions rejects map keys that normalise to the same canonical
+// key, describing the collision as a duplicate noun (e.g. "name", "GVK").
+func validateCollisions[V any](field, noun string, entries map[string]V) error {
 	seen := make(map[string]string, len(entries))
 	for _, name := range utils.SortedMapKeys(entries) {
 		canonical := NormalizeRegistryName(name)
 		if previous, ok := seen[canonical]; ok {
 			return fmt.Errorf(
-				"%s.%s and %s.%s resolve to the same name %q",
-				field, previous, field, name, canonical,
+				"%s.%s and %s.%s resolve to the same %s %q",
+				field, previous, field, name, noun, canonical,
 			)
 		}
 		seen[canonical] = name
@@ -109,6 +115,11 @@ func (v *AdapterConfigValidator) validateTransportRegistry() error {
 		return err
 	}
 	if err := ValidateTransportNameCollisions(v.config.Transports); err != nil {
+		return err
+	}
+	// This also covers direct validator/build callers and any overrides applied
+	// after the raw YAML collision check in loadAdapterConfigWithViper.
+	if err := ValidateResourcePluralKeyCollisions(v.config.Transports); err != nil {
 		return err
 	}
 
@@ -152,7 +163,22 @@ func (v *AdapterConfigValidator) validateTransportRegistry() error {
 		path := fmt.Sprintf("%s.%s", FieldTransports, name)
 		switch transport.Type {
 		case TransportTypeKubernetes:
+			if transport.Store != "" || transport.TargetCluster != "" || len(transport.ResourcePlurals) > 0 {
+				return fmt.Errorf("%s: local Kubernetes transport cannot configure remote routing", path)
+			}
 		case TransportTypeRemote:
+			if TransportClaimsReservedKubernetesName(name, transport) {
+				return fmt.Errorf("%s: name kubernetes is reserved for local Kubernetes", path)
+			}
+			if strings.TrimSpace(transport.TargetCluster) == "" {
+				return fmt.Errorf("%s.target_cluster is required for remote transport", path)
+			}
+			if err := validateTargetClusterSyntax(path, transport.TargetCluster); err != nil {
+				return err
+			}
+			if err := validateResourcePlurals(path, transport.ResourcePlurals); err != nil {
+				return err
+			}
 			storeName := NormalizeRegistryName(transport.Store)
 			if storeName == "" {
 				return fmt.Errorf("%s.%s is required for remote transport", path, FieldStore)
@@ -310,7 +336,6 @@ func (v *TaskConfigValidator) ValidateSemantic() error {
 	v.validateParamSources()
 	v.validateParamAPICallTemplates()
 	v.validateParamFileSources()
-	v.validateTransportConfig()
 	v.validateConditionValues()
 	v.validateCaptureFieldExpressions()
 	v.validateTemplateVariables()
@@ -399,22 +424,21 @@ func (v *TaskConfigValidator) validateTemplateStringWithVars(s, path string, var
 	for _, match := range matches {
 		if len(match) > 1 {
 			varName := match[1]
-			if !v.isVariableDefinedIn(varName, vars) {
+			if !isVariableDefinedIn(varName, vars) {
 				v.errors.Add(path, fmt.Sprintf("undefined template variable %q", varName))
 			}
 		}
 	}
 }
 
-func (v *TaskConfigValidator) isVariableDefinedIn(varName string, vars map[string]bool) bool {
+// isVariableDefinedIn reports whether varName, or the root name before its
+// first dot (e.g. "resources" in "resources.foo.bar"), is a defined variable.
+func isVariableDefinedIn(varName string, vars map[string]bool) bool {
 	if vars[varName] {
 		return true
 	}
-	parts := strings.Split(varName, ".")
-	if len(parts) > 0 && vars[parts[0]] {
-		return true
-	}
-	return false
+	root, _, _ := strings.Cut(varName, ".")
+	return vars[root]
 }
 
 func (v *TaskConfigValidator) collectDefinedVariables() {
@@ -520,66 +544,6 @@ func (v *TaskConfigValidator) initCELEnv() error {
 	return nil
 }
 
-func (v *TaskConfigValidator) validateTransportConfig() {
-	for i, resource := range v.config.Resources {
-		basePath := fmt.Sprintf("%s[%d]", FieldResources, i)
-
-		if resource.Transport != nil {
-			transportPath := basePath + "." + FieldTransport
-
-			client := resource.Transport.Client
-
-			if client == TransportClientMaestro {
-				// Maestro transport requires maestro config
-				if resource.Transport.Maestro == nil {
-					v.errors.Add(transportPath,
-						"maestro transport config is required when client is \"maestro\"")
-					continue
-				}
-
-				maestroPath := transportPath + "." + TransportClientMaestro
-
-				// Validate target_cluster is set
-				if resource.Transport.Maestro.TargetCluster == "" {
-					v.errors.Add(maestroPath+"."+FieldTargetCluster,
-						"target_cluster is required for maestro transport")
-				} else {
-					// Validate template variables in target_cluster
-					v.validateTemplateString(resource.Transport.Maestro.TargetCluster,
-						maestroPath+"."+FieldTargetCluster)
-				}
-
-				// Validate manifest is set for maestro transport
-				if resource.Manifest == nil {
-					v.errors.Add(basePath+"."+FieldManifest,
-						"manifest is required for maestro transport")
-				}
-			}
-
-			if resource.Transport.Desire != nil {
-				desirePath := transportPath + "." + FieldDesire
-				if resource.Transport.Desire.TargetCluster == "" {
-					v.errors.Add(desirePath+"."+FieldTargetCluster,
-						"target_cluster is required for desire transport")
-				} else {
-					v.validateTemplateString(resource.Transport.Desire.TargetCluster,
-						desirePath+"."+FieldTargetCluster)
-				}
-				if resource.Transport.Desire.Resource == "" {
-					v.errors.Add(desirePath+"."+FieldResource,
-						"resource is required for desire transport")
-				}
-			}
-		}
-
-		// Validate manifest is required for kubernetes transport (default)
-		if resource.GetTransportClient() == TransportClientKubernetes && resource.Manifest == nil {
-			v.errors.Add(basePath+"."+FieldManifest,
-				"manifest is required for kubernetes transport")
-		}
-	}
-}
-
 func (v *TaskConfigValidator) validateConditionValues() {
 	for i, precond := range v.config.Preconditions {
 		for j, cond := range precond.Conditions {
@@ -636,7 +600,7 @@ func (v *TaskConfigValidator) validateTemplateVariables() {
 		}
 	}
 
-	// Validate resource manifests and transport config templates
+	// Validate resource manifest templates
 	// All manifests are validated as template strings — map manifests are serialized
 	// to YAML first since they are rendered as Go templates at execution time.
 	for i, resource := range v.config.Resources {
@@ -645,9 +609,6 @@ func (v *TaskConfigValidator) validateTemplateVariables() {
 		if err == nil && manifestStr != "" {
 			v.validateTemplateString(manifestStr, resourcePath+"."+FieldManifest)
 		}
-		// NOTE: For maestro transport, we skip template variable validation for manifest content.
-		// ManifestWork templates may use variables provided at runtime by the framework
-		// (e.g., adapterName, timestamp) that are not necessarily declared in params or captures.
 		if resource.Discovery != nil {
 			discoveryPath := resourcePath + "." + FieldDiscovery
 			v.validateTemplateString(resource.Discovery.Namespace, discoveryPath+"."+FieldNamespace)
@@ -898,11 +859,6 @@ func (v *TaskConfigValidator) validateLifecycleConfig() {
 		if resource.Lifecycle.Delete != nil {
 			del := resource.Lifecycle.Delete
 			basePath := fmt.Sprintf("%s[%d].%s.%s", FieldResources, i, FieldLifecycle, FieldLifecycleDelete)
-			if resource.Transport != nil && resource.Transport.Desire != nil && resource.Discovery != nil &&
-				resource.Discovery.ByName == "" && resource.Discovery.BySelectors != nil &&
-				len(resource.Discovery.BySelectors.LabelSelector) > 0 {
-				v.errors.Add(basePath, ErrMsgDesireSelectorDeleteUnsupported)
-			}
 
 			// discovery is required — without it executeResourceDelete cannot locate
 			// the resource and will silently declare it "already deleted" without calling DeleteResource.

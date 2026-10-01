@@ -54,18 +54,18 @@ func TestLogOptionsBootstrapDefaults(t *testing.T) {
 func TestBuildExecutor_DryRunNamedRemoteTransport(t *testing.T) {
 	config := &configloader.Config{
 		Adapter: configloader.AdapterInfo{Name: "test-adapter"},
+		Stores: map[string]configloader.StoreDefinition{
+			"desired-memory": {Type: configloader.StoreTypeMemory},
+		},
 		Transports: map[string]configloader.TransportDefinition{
-			"remote-primary": {Type: configloader.TransportTypeRemote},
+			"remote-primary": {
+				Type: configloader.TransportTypeRemote, Store: "desired-memory", TargetCluster: "cluster-1",
+				ResourcePlurals: map[string]string{"v1/ConfigMap": "configmaps"},
+			},
 		},
 		Resources: []configloader.Resource{{
-			Name: "test-resource",
-			Transport: &configloader.TransportConfig{
-				Client: "remote-primary",
-				Desire: &configloader.DesireTransportConfig{
-					TargetCluster: "cluster-1",
-					Resource:      "configmaps",
-				},
-			},
+			Name:      "test-resource",
+			Transport: configloader.NamedTransport("remote-primary"),
 			Manifest: map[string]interface{}{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",

@@ -1,40 +1,73 @@
 package manifest
 
 import (
+	"fmt"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// ExtractGVKFromString extracts apiVersion and kind from a YAML string
-// by scanning lines. This handles manifests with Go template directives
-// that would fail full YAML parsing.
+// StaticGVK reads a manifest template's apiVersion and kind without rendering
+// it, as discovery, deletion, and remote routing need them before rendering.
 //
-// Assumption: apiVersion and kind are always static (not templated).
-// This is a valid K8s constraint — the API server requires exact schema
-// identifiers. This function is also used in deletion flows where no
-// rendered manifest is available (discover → delete, no render/apply).
-func ExtractGVKFromString(manifest string) schema.GroupVersionKind {
+// It reads the "apiVersion:" and "kind:" lines at the manifest's top level,
+// the indentation of its first field. Each must appear exactly once, with a
+// literal value. Appearing once rules out a kind set in both branches of an
+// {{ if }}/{{ else }}, and a second YAML document in the manifest. The
+// executor rejects a rendered manifest whose GVK differs.
+//
+// TODO(HYPERFLEET-1448): document in the authoring guide that declaring apiVersion
+// or kind in both {{ if }}/{{ else }} branches fails at startup, even when their
+// values match. Conditionals in other manifest fields remain supported.
+func StaticGVK(manifest string) (schema.GroupVersionKind, error) {
 	var apiVersion, kind string
+	indent := -1
+	lineNo := 0
 	for line := range strings.SplitSeq(manifest, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if val, ok := strings.CutPrefix(trimmed, "apiVersion:"); ok {
-			apiVersion = strings.TrimSpace(val)
-			apiVersion = strings.Trim(apiVersion, "\"'")
-		} else if val, ok := strings.CutPrefix(trimmed, "kind:"); ok {
-			kind = strings.TrimSpace(val)
-			kind = strings.Trim(kind, "\"'")
+		lineNo++
+		content := strings.TrimSpace(line)
+		if content == "" || strings.HasPrefix(content, "#") || strings.HasPrefix(content, "---") ||
+			strings.HasPrefix(content, "{{") {
+			continue
 		}
-		if apiVersion != "" && kind != "" {
-			break
+		lineIndent := len(line) - len(strings.TrimLeft(line, " "))
+		if indent < 0 {
+			indent = lineIndent
 		}
+		key, value, _ := strings.Cut(content, ":")
+		if lineIndent != indent {
+			continue
+		}
+		var target *string
+		switch key {
+		case "apiVersion":
+			target = &apiVersion
+		case "kind":
+			target = &kind
+		default:
+			continue
+		}
+		if *target != "" {
+			return schema.GroupVersionKind{}, fmt.Errorf(
+				"line %d: %s is set more than once (in several template branches or YAML documents)", lineNo, key)
+		}
+		value, _, _ = strings.Cut(value, " #")
+		value = strings.Trim(strings.TrimSpace(value), `"'`)
+		if value == "" || strings.Contains(value, "{{") {
+			return schema.GroupVersionKind{}, fmt.Errorf("line %d: %s must be a literal value", lineNo, key)
+		}
+		*target = value
 	}
-	if apiVersion == "" || kind == "" {
-		return schema.GroupVersionKind{}
+
+	if apiVersion == "" {
+		return schema.GroupVersionKind{}, fmt.Errorf("apiVersion must be set as a top-level field")
+	}
+	if kind == "" {
+		return schema.GroupVersionKind{}, fmt.Errorf("kind must be set as a top-level field")
 	}
 	gv, err := schema.ParseGroupVersion(apiVersion)
 	if err != nil {
-		return schema.GroupVersionKind{}
+		return schema.GroupVersionKind{}, fmt.Errorf("apiVersion: %w", err)
 	}
-	return gv.WithKind(kind)
+	return gv.WithKind(kind), nil
 }

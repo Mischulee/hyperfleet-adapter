@@ -154,6 +154,11 @@ func loadAdapterConfigWithViper(
 	if err := ValidateTransportNameCollisions(validateConfig.Transports); err != nil {
 		return "", nil, fmt.Errorf("invalid transport names: %w", err)
 	}
+	// Check raw keys before Viper folds their case. The parsed config is checked
+	// again after environment and flag overrides have been applied.
+	if err := ValidateResourcePluralKeyCollisions(validateConfig.Transports); err != nil {
+		return "", nil, fmt.Errorf("invalid remote resource mappings: %w", err)
+	}
 
 	// Parse YAML into a map for Viper (env/CLI overrides are applied next)
 	var configMap map[string]interface{}
@@ -239,6 +244,9 @@ func loadTaskConfig(filePath string) (*AdapterTaskConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read task config file %q: %w", filePath, err)
 	}
+	if err := rejectNullResourceTransports(data); err != nil {
+		return nil, err
+	}
 
 	var config AdapterTaskConfig
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
@@ -248,6 +256,26 @@ func loadTaskConfig(filePath string) (*AdapterTaskConfig, error) {
 	}
 
 	return &config, nil
+}
+
+// A nil *string represents an omitted transport. Reject an explicitly null
+// YAML value before decoding so it cannot silently select local Kubernetes.
+// Decoding into maps resolves aliases and merge keys, so a null inherited
+// through `<<: *base` is caught as well.
+func rejectNullResourceTransports(data []byte) error {
+	var document struct {
+		Resources []map[string]any `yaml:"resources"`
+	}
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		// The struct decode that follows reports malformed task configs.
+		return nil
+	}
+	for i, resource := range document.Resources {
+		if transport, present := resource[FieldTransport]; present && transport == nil {
+			return fmt.Errorf("resources[%d].transport must name a transport", i)
+		}
+	}
+	return nil
 }
 
 // getBaseDir returns the base directory for a config file path

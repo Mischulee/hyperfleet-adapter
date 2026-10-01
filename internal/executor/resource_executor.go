@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/configloader"
@@ -19,6 +20,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 const (
@@ -96,8 +98,7 @@ func (re *ResourceExecutor) ExecuteAll(
 }
 
 // executeResource creates or updates a single resource via the transport client.
-// For k8s transport: renders manifest template → marshals to JSON → calls ApplyResource(bytes)
-// For maestro transport: renders manifestWork template → marshals to JSON → calls ApplyResource(bytes)
+// Renders the Kubernetes manifest and applies it through the resolved transport.
 func (re *ResourceExecutor) executeResource(
 	ctx context.Context,
 	resource configloader.Resource,
@@ -202,6 +203,23 @@ func (re *ResourceExecutor) executeResource(
 		result.ResourceName = obj.GetName()
 	}
 
+	// Discovery, deletion, and remote plural routing use the static GVK, so the
+	// rendered object must not change it (for example through a conditional
+	// apiVersion or kind line the static scan cannot see).
+	staticGVK, err := resource.StaticGVK()
+	if err != nil {
+		result.Status = StatusFailed
+		result.Error = err
+		return result, NewExecutorError(PhaseResources, resource.Name, "failed to read manifest GVK", err)
+	}
+	if obj.GroupVersionKind() != staticGVK {
+		gvkErr := fmt.Errorf("rendered manifest GVK %q does not match static GVK %q",
+			obj.GroupVersionKind().String(), staticGVK.String())
+		result.Status = StatusFailed
+		result.Error = gvkErr
+		return result, NewExecutorError(PhaseResources, resource.Name, "rendered manifest changed its GVK", gvkErr)
+	}
+
 	// Step 5: Prepare apply options
 	var applyOpts *transportclient.ApplyOptions
 	if resource.RecreateOnChange {
@@ -282,7 +300,7 @@ func (re *ResourceExecutor) executeResource(
 }
 
 // renderToBytes renders the resource's manifest template to JSON bytes.
-// The manifest holds either a K8s resource or a ManifestWork depending on transport type.
+// The manifest holds a Kubernetes resource.
 // All manifests are rendered as Go templates: map manifests are serialized to YAML first,
 // then rendered and parsed like string manifests.
 func (re *ResourceExecutor) renderToBytes(
@@ -403,7 +421,10 @@ func (re *ResourceExecutor) discoverResource(
 			LabelSelector: labelSelector,
 		}
 
-		gvk := re.resolveGVK(resource)
+		gvk, err := resource.StaticGVK()
+		if err != nil {
+			return nil, err
+		}
 
 		var discovered *unstructured.Unstructured
 		list, err := transportClient.DiscoverResources(ctx, gvk, discoveryConfig, transportTarget)
@@ -435,7 +456,10 @@ func (re *ResourceExecutor) discoverResourceByName(
 	transportTarget transportclient.TransportContext,
 	dt *discoveryTarget,
 ) (*unstructured.Unstructured, error) {
-	gvk := re.resolveGVK(resource)
+	gvk, err := resource.StaticGVK()
+	if err != nil {
+		return nil, err
+	}
 	discovered, discoverErr := transportClient.GetResource(ctx, gvk, dt.Namespace, dt.Name, transportTarget)
 	re.recordDiscoveryState(resource, execCtx, discovered, discoverErr)
 	return discovered, discoverErr
@@ -554,35 +578,6 @@ func (re *ResourceExecutor) buildNestedDiscoveryConfig(
 	return nil, fmt.Errorf("discovery must specify byName or bySelectors")
 }
 
-// resolveGVK extracts the GVK from the resource's manifest.
-// Works for both K8s resources and ManifestWorks since both have apiVersion and kind.
-func (re *ResourceExecutor) resolveGVK(resource configloader.Resource) schema.GroupVersionKind {
-	var manifestData map[string]interface{}
-
-	switch m := resource.Manifest.(type) {
-	case map[string]interface{}:
-		manifestData = m
-	case string:
-		// String manifests may contain Go template directives ({{ if }}, {{ range }})
-		// that make them invalid YAML. Extract apiVersion and kind by scanning lines
-		// instead of full YAML parsing.
-		return manifest.ExtractGVKFromString(m)
-	default:
-		return schema.GroupVersionKind{}
-	}
-
-	apiVersion, ok1 := manifestData["apiVersion"].(string)
-	kind, ok2 := manifestData["kind"].(string)
-	if !ok1 || !ok2 {
-		return schema.GroupVersionKind{}
-	}
-	gv, err := schema.ParseGroupVersion(apiVersion)
-	if err != nil {
-		return schema.GroupVersionKind{}
-	}
-	return gv.WithKind(kind)
-}
-
 // hasLifecycleConfig reports whether any resource in the list has lifecycle.create or lifecycle.delete configured.
 func hasLifecycleConfig(resources []configloader.Resource) bool {
 	for _, r := range resources {
@@ -650,12 +645,16 @@ func (re *ResourceExecutor) resolveTransport(
 	resource configloader.Resource,
 	execCtx *ExecutionContext,
 ) (transportclient.TransportClient, transportclient.TransportContext, error) {
-	transportName := configloader.NormalizeRegistryName(resource.GetTransportClient())
+	transportName := configloader.NormalizeRegistryName(resource.GetTransportName())
+	if transportName == "" {
+		return nil, nil, fmt.Errorf("resource transport name is blank")
+	}
 	var definition configloader.TransportDefinition
 	configured := false
 	if re.config != nil {
 		definition, configured = configloader.TransportDefinitionByName(re.config.Transports, transportName)
 	}
+	// TODO(HYPERFLEET-1504): remove the maestro route with the Maestro transport.
 	if transportName == configloader.TransportClientMaestro && configured {
 		return nil, nil, fmt.Errorf("transport name %q is reserved for the built-in maestro transport", transportName)
 	}
@@ -678,20 +677,27 @@ func (re *ResourceExecutor) resolveTransport(
 	if !configured || definition.Type != configloader.TransportTypeRemote {
 		return client, nil, nil
 	}
-	if resource.Transport == nil || resource.Transport.Desire == nil {
-		return nil, nil, fmt.Errorf("desire transport config is required for %q", transportName)
-	}
-	targetCluster, err := utils.RenderTemplate(resource.Transport.Desire.TargetCluster, execCtx.Params)
+	targetCluster, err := utils.RenderTemplate(definition.TargetCluster, execCtx.Params)
 	if err != nil {
-		return nil, nil, fmt.Errorf("render desire target cluster: %w", err)
+		return nil, nil, fmt.Errorf("render transport %q target_cluster: %w", transportName, err)
 	}
-	if resource.Transport.Desire.Resource == "" {
-		return nil, nil, fmt.Errorf("desire resource is required for %q", transportName)
+	if errs := validation.IsDNS1123Label(targetCluster); len(errs) > 0 {
+		return nil, nil, fmt.Errorf("transport %q target_cluster %q must be a Kubernetes DNS-1123 label: %s",
+			transportName, targetCluster, strings.Join(errs, ", "))
+	}
+	gvk, err := resource.StaticGVK()
+	if err != nil {
+		return nil, nil, fmt.Errorf("transport %q manifest: %w", transportName, err)
+	}
+	plural, ok := definition.PluralForGVK(gvk)
+	if !ok {
+		return nil, nil, fmt.Errorf("transport %q has no resource_plurals mapping for %s/%s",
+			transportName, gvk.GroupVersion().String(), gvk.Kind)
 	}
 
 	return client, &desireclient.TransportContext{
 		ManagementCluster: targetCluster,
-		Resource:          resource.Transport.Desire.Resource,
+		Resource:          plural,
 	}, nil
 }
 
@@ -752,24 +758,29 @@ func (re *ResourceExecutor) executeResourceDelete(
 	transportClient transportclient.TransportClient,
 	transportTarget transportclient.TransportContext,
 ) (ResourceResult, error) {
+	result := ResourceResult{
+		Name:      resource.Name,
+		Status:    StatusSuccess,
+		Operation: manifest.OperationDelete,
+	}
+
 	// Extract resource type (Kubernetes kind) from manifest for metrics labeling.
 	// This is done early so it's available for all metric recording paths (success/failure).
-	gvk := re.resolveGVK(resource)
-	resourceType := gvk.Kind
-	if resourceType == "" {
-		resourceType = metrics.ResourceTypeUnknown
+	gvk, err := resource.StaticGVK()
+	if err != nil {
+		result.Status = StatusFailed
+		result.Error = err
+		re.recordResourceError(execCtx, resource, err)
+		re.metrics.RecordDeletion(metrics.ResourceTypeUnknown, metrics.DeletionStatusError)
+		return result, NewExecutorError(PhaseResources, resource.Name, "failed to read manifest GVK", err)
 	}
+	resourceType := gvk.Kind
 
 	// Metrics: track deletion in-progress and duration
 	startTime := time.Now()
 	re.metrics.IncDeletionInProgress(resourceType)
 	defer re.metrics.DecDeletionInProgress(resourceType)
 
-	result := ResourceResult{
-		Name:      resource.Name,
-		Status:    StatusSuccess,
-		Operation: manifest.OperationDelete,
-	}
 	if lifecycle, ok := transportClient.(transportclient.DeletionLifecycle); ok {
 		return re.executeDesireResourceDelete(ctx, resource, execCtx, transportClient,
 			lifecycle, transportTarget, gvk, resourceType, startTime, result)

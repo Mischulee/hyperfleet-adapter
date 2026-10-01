@@ -3,7 +3,9 @@ package manifest
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/utils"
@@ -50,9 +52,26 @@ func RenderStringManifest(manifestStr string, params map[string]interface{}) ([]
 		return nil, fmt.Errorf("empty manifest: template rendered to an empty document")
 	}
 
+	// Decode every document so that a second object is an error rather than
+	// silently dropped. Empty documents, such as one after a trailing "---",
+	// are skipped.
 	var manifestData map[string]interface{}
-	if unmarshalErr := yaml.Unmarshal([]byte(rendered), &manifestData); unmarshalErr != nil {
-		return nil, fmt.Errorf("failed to parse rendered manifest as YAML: %w", unmarshalErr)
+	decoder := yaml.NewDecoder(strings.NewReader(rendered))
+	for {
+		var doc map[string]interface{}
+		if err = decoder.Decode(&doc); errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse rendered manifest as YAML: %w", err)
+		}
+		if doc == nil {
+			continue
+		}
+		if manifestData != nil {
+			return nil, fmt.Errorf("rendered manifest must be a single YAML document")
+		}
+		manifestData = doc
 	}
 	if len(manifestData) == 0 {
 		return nil, fmt.Errorf("empty manifest: rendered YAML did not contain an object")

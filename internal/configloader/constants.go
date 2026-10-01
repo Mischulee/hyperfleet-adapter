@@ -21,11 +21,12 @@ const (
 )
 
 // ErrMsgDesireSelectorDeleteUnsupported is shared between config-load validation
-// (validator.go) and the executor's runtime guard (executeDesireResourceDelete),
-// which independently rejects selector-based desire deletion for configs built
-// without going through the validator (e.g. tests, dry-run construction).
+// (ValidateResourceTransports, in remote_transport.go) and the executor's
+// runtime guard (executeDesireResourceDelete), which independently rejects
+// selector-based desire deletion for configs built without going through the
+// validator (e.g. tests, dry-run construction).
 const ErrMsgDesireSelectorDeleteUnsupported = "selector-based lifecycle deletion is unsupported for " +
-	"desire transport; use discovery.by_name"
+	"remote transport; use discovery.by_name"
 
 // Adapter field names
 const (
@@ -85,12 +86,11 @@ const (
 	FieldTransport     = "transport"
 	FieldClient        = "client"
 	FieldMaestro       = "maestro"
-	FieldDesire        = "desire"
 	FieldTargetCluster = "target_cluster"
-	FieldResource      = "resource"
 )
 
 // Transport client types
+// TODO(HYPERFLEET-1504): drop TransportClientMaestro and the client/maestro field names.
 const (
 	TransportClientKubernetes = "kubernetes"
 	TransportClientMaestro    = "maestro"
