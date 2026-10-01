@@ -12,8 +12,6 @@ import (
 // transitional shim that keeps deployed pre-v2 task configs, including Maestro
 // ones, loading so adapter main stays deployable and e2e stays green meanwhile.
 
-const schemaVersionV2 = "2.0"
-
 // ResourceTransport is a resource's transport reference: a named deployment
 // route, or the pre-v2 object form {client, maestro}. A schema_version "2.0"
 // task must name a transport.
@@ -87,13 +85,6 @@ func validateLegacyTransport(
 ) (maestro bool, err error) {
 	transport := resource.Transport
 	path += "." + FieldTransport
-	// TODO(HYPERFLEET-1443): the object form is accepted only without schema_version
-	// "2.0". Keep accepting unversioned v1 configs (no v1 diagnostic error) until the
-	// cutover lands, or every deployed adapter config fails at startup.
-	if config.SchemaVersion == schemaVersionV2 {
-		return false, fmt.Errorf("%s: the object form is not supported with schema_version %q; "+
-			"name a transport instead", path, schemaVersionV2)
-	}
 	switch transport.Name {
 	case TransportClientKubernetes:
 		if transport.Maestro != nil {

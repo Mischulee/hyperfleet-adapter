@@ -27,6 +27,10 @@ func TestShippedV2ConfigsLoad(t *testing.T) {
 			name: "two resources", adapterPath: "charts/examples/remote-two-resources/adapter-config.yaml",
 			taskPath: "charts/examples/remote-two-resources/adapter-task-config.yaml", resources: 2,
 		},
+		{
+			name: "CEL showcase", adapterPath: "test/testdata/dryrun/dryrun-kubernetes-adapter-config.yaml",
+			taskPath: "test/testdata/dryrun/cel-showcase/dryrun-cel-showcase-task-config.yaml", resources: 3,
+		},
 	}
 
 	for _, tc := range cases {

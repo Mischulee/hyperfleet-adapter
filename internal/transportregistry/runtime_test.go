@@ -39,6 +39,7 @@ transports:
     store: desired-memory
 `)
 	config.Resources = []configloader.Resource{testRemoteResource("remote", "remote-primary")}
+	config.SchemaVersion = "2.0"
 
 	runtime, err := Build(t.Context(), config)
 	require.NoError(t, err)
@@ -78,6 +79,7 @@ transports:
 
 func TestBuildRecordingUsesLocalDefaultOnlyWhenReferenced(t *testing.T) {
 	config := &configloader.Config{
+		SchemaVersion: "2.0",
 		Stores: map[string]configloader.StoreDefinition{
 			"desired-memory": {Type: configloader.StoreTypeMemory},
 		},
@@ -475,6 +477,7 @@ func TestBuildRejectsInvalidNamedTransportBeforeStartingService(t *testing.T) {
 		{
 			name: "resource kind has no plural on its remote transport",
 			config: &configloader.Config{
+				SchemaVersion: "2.0",
 				Stores: map[string]configloader.StoreDefinition{
 					"desired-memory": {Type: configloader.StoreTypeMemory},
 				},
@@ -748,6 +751,7 @@ func TestBuildReusesDeclaredKubernetesTransportForOmittedResources(t *testing.T)
 
 func TestBuildSharesClientAcrossNamedKubernetesTransports(t *testing.T) {
 	config := &configloader.Config{
+		SchemaVersion: "2.0",
 		Clients: configloader.ClientsConfig{
 			Kubernetes: configloader.KubernetesConfig{KubeConfigPath: writeTestKubeconfig(t)},
 		},

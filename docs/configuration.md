@@ -14,7 +14,8 @@ You can point the adapter at a deployment config file with either:
 - CLI: `--config` (or `-c`)
 - Env: `HYPERFLEET_ADAPTER_CONFIG`
 
-Task config is separate (`--task-config` / `HYPERFLEET_TASK_CONFIG`) and not covered here.
+Task config is separate (`--task-config` / `HYPERFLEET_TASK_CONFIG`) and is pure YAML.
+Its `schema_version` and resource transport rules are described below.
 
 ## YAML options (AdapterConfig)
 
@@ -33,25 +34,6 @@ log:
   output: "stdout"
 
 clients:
-  maestro:
-    grpc_server_address: "maestro-grpc.maestro.svc.cluster.local:8090"
-    http_server_address: "https://maestro-api.maestro.svc.cluster.local"
-    source_id: "hyperfleet-adapter"
-    client_id: "hyperfleet-adapter-client"
-    auth:
-      type: "tls"
-      tls_config:
-        ca_file: "/etc/maestro/certs/grpc/ca.crt"
-        cert_file: "/etc/maestro/certs/grpc/client.crt"
-        key_file: "/etc/maestro/certs/grpc/client.key"
-        http_ca_file: "/etc/maestro/certs/https/ca.crt"
-    timeout: "30s"
-    server_healthiness_timeout: "20s"
-    retry_attempts: 3
-    keepalive:
-      time: "30s"
-      timeout: "10s"
-    insecure: false
   hyperfleet_api:
     base_url: "http://hyperfleet-api:8000"
     version: "v1"
@@ -74,6 +56,19 @@ clients:
     kube_config_path: "/path/to/kubeconfig"
     qps: 100
     burst: 200
+
+stores:
+  remote-store:
+    type: redis
+    url: "rediss://redis.example.com:6379/0"
+transports:
+  remote-primary:
+    type: remote
+    store: remote-store
+    target_cluster: "{{ .clusterId }}"
+    resource_plurals:
+      "v1/ConfigMap": configmaps
+      "apps.example.io/v1/Widget": widgets
 ```
 
 ### Top-level fields
@@ -88,7 +83,70 @@ clients:
 - `log.format` (string, optional): Log format (`text`, `json`). Default: `json`.
 - `log.output` (string, optional): Log output destination (`stdout`, `stderr`). Default: `stdout`.
 
-### Maestro client (`clients.maestro`)
+### Transports and stores
+
+`transports` and `stores` are named deployment maps. Names resolve without regard to case.
+A resource in a v2 task names a transport with `transport: remote-primary`; an omitted
+transport uses local Kubernetes. A local-only deployment can omit both maps.
+
+| Entry | Fields | Requirements |
+| --- | --- | --- |
+| `transports.<name>` with `type: kubernetes` | `type` | Uses the local Kubernetes client; remote routing fields are invalid. |
+| `transports.<name>` with `type: remote` | `type`, `store`, `target_cluster`, `resource_plurals` | All routing fields are required. `store` names a declared store. `target_cluster` is a literal Kubernetes cluster name or a template using defined task parameters. `resource_plurals` maps static `apiVersion/Kind` keys to plural resource names; API groups may contain dots. |
+| `stores.<name>` with `type: memory` | `type` | In-process storage that does not survive a restart. No URL is accepted. |
+| `stores.<name>` with `type: redis` | `type`, `url` | A valid Redis URL is required. Use `rediss://` when the URL contains credentials. |
+
+Every declared store must be used by a remote transport. Store connection settings
+belong in deployment config; task config has no environment or flag overrides.
+
+### Task schema version
+
+Every v2 task declares the YAML string `schema_version: "2.0"`. For example:
+
+```yaml
+schema_version: "2.0"
+params:
+  - name: clusterId
+    source: event.id
+resources:
+  - name: configMap
+    transport: remote-primary
+    manifest: {apiVersion: v1, kind: ConfigMap, metadata: {name: example}}
+    discovery: {by_name: example}
+```
+
+An unversioned task that names a transport is rejected. During the transition,
+unversioned legacy tasks still load; other version strings and non-string YAML
+values are rejected.
+
+### Legacy Maestro client (`clients.maestro`)
+
+These settings remain available for unversioned legacy tasks until the Maestro
+cutover. Do not combine `clients.maestro` with named `transports`. V2 tasks use
+the named `kubernetes` and `remote` transports described above.
+
+```yaml
+clients:
+  maestro:
+    grpc_server_address: "maestro-grpc.maestro.svc.cluster.local:8090"
+    http_server_address: "https://maestro-api.maestro.svc.cluster.local"
+    source_id: "hyperfleet-adapter"
+    client_id: "hyperfleet-adapter-client"
+    auth:
+      type: "tls"
+      tls_config:
+        ca_file: "/etc/maestro/certs/grpc/ca.crt"
+        cert_file: "/etc/maestro/certs/grpc/client.crt"
+        key_file: "/etc/maestro/certs/grpc/client.key"
+        http_ca_file: "/etc/maestro/certs/https/ca.crt"
+    timeout: "30s"
+    server_healthiness_timeout: "20s"
+    retry_attempts: 3
+    keepalive:
+      time: "30s"
+      timeout: "10s"
+    insecure: false
+```
 
 - `grpc_server_address` (string): Maestro gRPC endpoint.
 - `http_server_address` (string): Maestro HTTP API endpoint.
@@ -209,6 +267,9 @@ The Helm chart exposes `monitoring.tracing.enabled`, `monitoring.tracing.otlpEnd
 
 The following CLI flags override YAML values:
 
+Named `transports` and `stores` map entries have no dedicated CLI flags; a store
+URL can be set from the environment (see [Environment variables](#environment-variables)).
+
 **General**
 
 - `--debug-config` -> `debug_config`
@@ -216,7 +277,7 @@ The following CLI flags override YAML values:
 - `--log-format` -> `log.format`
 - `--log-output` -> `log.output`
 
-**Maestro**
+**Legacy Maestro**
 
 - `--maestro-grpc-server-address` -> `clients.maestro.grpc_server_address`
 - `--maestro-http-server-address` -> `clients.maestro.http_server_address`
@@ -259,6 +320,7 @@ The following CLI flags override YAML values:
 ## Environment variables
 
 All deployment overrides use the `HYPERFLEET_` prefix unless noted.
+Task `schema_version` has no environment override.
 
 **General**
 
@@ -267,7 +329,7 @@ All deployment overrides use the `HYPERFLEET_` prefix unless noted.
 - `LOG_FORMAT` -> `log.format`
 - `LOG_OUTPUT` -> `log.output`
 
-**Maestro**
+**Legacy Maestro**
 
 - `HYPERFLEET_MAESTRO_GRPC_SERVER_ADDRESS` -> `clients.maestro.grpc_server_address`
 - `HYPERFLEET_MAESTRO_HTTP_SERVER_ADDRESS` -> `clients.maestro.http_server_address`
@@ -310,7 +372,25 @@ All deployment overrides use the `HYPERFLEET_` prefix unless noted.
 - `HYPERFLEET_KUBERNETES_QPS` -> `clients.kubernetes.qps`
 - `HYPERFLEET_KUBERNETES_BURST` -> `clients.kubernetes.burst`
 
+**Stores**
+
+- `HYPERFLEET_STORES_<NAME>_URL` -> `stores.<name>.url`
+
+`<NAME>` is the store name in upper case with `-` replaced by `_`: for example,
+`HYPERFLEET_STORES_REMOTE_STORE_URL` sets `stores.remote-store.url`, which keeps
+Redis credentials out of the ConfigMap. The store and its `url` must also appear
+in the YAML (a placeholder such as `url: rediss://CHANGE_ME:6379` is enough);
+an environment variable cannot add a store or a field the YAML omits.
+
 Legacy broker environment variables (used only if the prefixed version is unset):
 
 - `BROKER_SUBSCRIPTION_ID` -> `clients.broker.subscription_id`
 - `BROKER_TOPIC` -> `clients.broker.topic`
+
+## V2 concepts changed
+
+V2 resources name a transport declared in the deployment config instead of
+embedding a transport object in each resource. Remote routing and its store
+move to the deployment maps. V2 discovery describes plain live resources;
+`nested_discoveries` entries are a v1 resource shape. Use `discovery` on each
+resource and declare the task's `schema_version: "2.0"`.

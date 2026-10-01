@@ -778,7 +778,7 @@ type KeepaliveConfig struct {
 // Contains params, preconditions, resources, and post-processing actions.
 // This config is loaded from YAML without environment variable overrides.
 type AdapterTaskConfig struct {
-	// SchemaVersion is consumed by the version gate delivered with HYPERFLEET-1443.
+	// SchemaVersion selects the task DSL contract.
 	SchemaVersion string         `yaml:"schema_version,omitempty"`
 	Post          *PostConfig    `yaml:"post,omitempty" validate:"omitempty"`
 	Params        []Parameter    `yaml:"params,omitempty" validate:"dive"`

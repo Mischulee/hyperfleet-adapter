@@ -137,6 +137,9 @@ func (v *AdapterConfigValidator) validateTransportRegistry() error {
 		path := fmt.Sprintf("%s.%s", FieldStores, name)
 		switch store.Type {
 		case StoreTypeMemory:
+			if store.URL != "" {
+				return fmt.Errorf("%s.url is not valid for memory store", path)
+			}
 		case StoreTypeRedis:
 			if strings.TrimSpace(store.URL) == "" {
 				return fmt.Errorf("%s.url is required for redis store", path)

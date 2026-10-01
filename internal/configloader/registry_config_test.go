@@ -1,6 +1,7 @@
 package configloader
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -287,6 +288,28 @@ func TestAdapterConfigValidationDoesNotExposeCredentialsFromInvalidRedisURL(t *t
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "stores.credentials.url is invalid")
 	assert.NotContains(t, err.Error(), password)
+}
+
+func TestMemoryStoreRejectsURLWithoutExposingIt(t *testing.T) {
+	for _, tc := range []struct{ name, value string }{
+		{"Redis URL", "rediss://user:secret@example.com:6379/0"},
+		{"whitespace", "   "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := &AdapterConfig{Adapter: AdapterInfo{Name: "test"},
+				Stores:     map[string]StoreDefinition{"desired": {Type: StoreTypeMemory, URL: tc.value}},
+				Transports: map[string]TransportDefinition{"remote": expectedRemoteDefinition("desired")},
+			}
+			err := NewAdapterConfigValidator(config, "").ValidateStructure()
+			require.ErrorContains(t, err, "stores.desired.url is not valid for memory store")
+			assert.NotContains(t, err.Error(), tc.value)
+		})
+	}
+	adapter := strings.Replace(remoteAdapterYAML, "type: memory",
+		"type: memory\n    url: rediss://user:secret@example.com:6379/0", 1)
+	_, err := loadRemoteConfig(t, adapter, remoteTaskYAML)
+	require.ErrorContains(t, err, "stores.desired-memory.url is not valid for memory store")
+	assert.NotContains(t, err.Error(), "secret")
 }
 
 func TestAdapterConfigValidationRequiresTLSForRedisCredentials(t *testing.T) {

@@ -244,7 +244,7 @@ func loadTaskConfig(filePath string) (*AdapterTaskConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read task config file %q: %w", filePath, err)
 	}
-	if err := rejectNullResourceTransports(data); err != nil {
+	if err := checkTaskSchemaYAML(data); err != nil {
 		return nil, err
 	}
 
@@ -256,26 +256,6 @@ func loadTaskConfig(filePath string) (*AdapterTaskConfig, error) {
 	}
 
 	return &config, nil
-}
-
-// A nil *string represents an omitted transport. Reject an explicitly null
-// YAML value before decoding so it cannot silently select local Kubernetes.
-// Decoding into maps resolves aliases and merge keys, so a null inherited
-// through `<<: *base` is caught as well.
-func rejectNullResourceTransports(data []byte) error {
-	var document struct {
-		Resources []map[string]any `yaml:"resources"`
-	}
-	if err := yaml.Unmarshal(data, &document); err != nil {
-		// The struct decode that follows reports malformed task configs.
-		return nil
-	}
-	for i, resource := range document.Resources {
-		if transport, present := resource[FieldTransport]; present && transport == nil {
-			return fmt.Errorf("resources[%d].transport must name a transport", i)
-		}
-	}
-	return nil
 }
 
 // getBaseDir returns the base directory for a config file path
