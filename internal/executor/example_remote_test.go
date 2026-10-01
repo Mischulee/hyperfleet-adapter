@@ -50,12 +50,15 @@ func TestRemoteTwoResourceExampleLifecycle(t *testing.T) {
 	desiretest.PutUnsyncedReadDesire(t, ctx, store, namespace.Read(), owner)
 	desiretest.PutUnsyncedReadDesire(t, ctx, store, configMap.Read(), owner)
 
-	run := func(deleting bool, available, finalized string) *executor.ExecutionResult {
+	run := func(deleting bool, applied, available, finalized string) *executor.ExecutionResult {
 		t.Helper()
 		api.Reset()
-		status := `{"generation":"77"}`
+		// The API returns generation as a number. At a million or more this also
+		// checks the param's `type: int`; without it the annotation renders as
+		// 1.234567e+06. A soft delete bumps the generation.
+		status := `{"generation":1234567}`
 		if deleting {
-			status = `{"generation":"77","deleted_time":"2026-09-29T00:00:00Z"}`
+			status = `{"generation":1234568,"deleted_time":"2026-09-29T00:00:00Z"}`
 		}
 		api.GetResponse = &hyperfleetapi.Response{StatusCode: 200, Body: []byte(status)}
 		result := adapterExecutor.Execute(ctx, map[string]any{"id": "abc123", "kind": "Cluster"})
@@ -77,40 +80,43 @@ func TestRemoteTwoResourceExampleLifecycle(t *testing.T) {
 		for _, condition := range payload.Conditions {
 			conditions[condition.Type] = condition.Status
 		}
+		assert.Equal(t, applied, conditions["Applied"])
 		assert.Equal(t, available, conditions["Available"])
 		assert.Equal(t, finalized, conditions["Finalized"])
 		assert.Equal(t, "True", conditions["Health"])
 		return result
 	}
 
-	// Unsynced and stale mirrors are not evidence of failure, so Available stays Unknown.
-	result := run(false, "Unknown", "False")
+	// Unsynced and stale mirrors are not evidence of failure, so Applied and
+	// Available stay Unknown until both mirrors are present.
+	result := run(false, "Unknown", "Unknown", "False")
 	assert.Equal(t, executor.ResourceStateUnsynced, result.ExecutionContext.ResourceStates["namespace"])
 	assert.Equal(t, executor.ResourceStateUnsynced, result.ExecutionContext.ResourceStates["configMap"])
 
 	desiretest.MarkReadDesireSynced(t, ctx, store, namespace.Read(), []byte(`{
 		"apiVersion":"v1","kind":"Namespace",
-		"metadata":{"name":"abc123-remote","annotations":{"hyperfleet.io/generation":"77"}},
+		"metadata":{"name":"abc123-remote","annotations":{"hyperfleet.io/generation":"1234567"}},
 		"status":{"phase":"Active"}
 	}`))
 	desiretest.MarkReadDesireNotFound(t, ctx, store, configMap.Read())
-	run(false, "Unknown", "False")
+	run(false, "Unknown", "Unknown", "False")
 
 	desiretest.MarkReadDesireSynced(t, ctx, store, configMap.Read(), []byte(`{
 		"apiVersion":"v1","kind":"ConfigMap",
 		"metadata":{"name":"cluster-config","namespace":"abc123-remote",
-			"annotations":{"hyperfleet.io/generation":"76"}}
+			"annotations":{"hyperfleet.io/generation":"1234566"}}
 	}`))
-	run(false, "Unknown", "False")
+	run(false, "True", "Unknown", "False")
 
 	desiretest.MarkReadDesireSynced(t, ctx, store, configMap.Read(), []byte(`{
 		"apiVersion":"v1","kind":"ConfigMap",
 		"metadata":{"name":"cluster-config","namespace":"abc123-remote",
-			"annotations":{"hyperfleet.io/generation":"77"}}
+			"annotations":{"hyperfleet.io/generation":"1234567"}}
 	}`))
-	run(false, "True", "False")
+	run(false, "True", "True", "False")
 
-	result = run(true, "True", "False")
+	// The deleting event carries a newer generation than both mirrors.
+	result = run(true, "True", "Unknown", "False")
 	assert.NotEqual(t, executor.ResourceStateConfirmedDeleted, result.ExecutionContext.ResourceStates["configMap"])
 	_, err = store.GetDeleteDesire(ctx, configMap.Delete())
 	require.NoError(t, err)
@@ -118,18 +124,18 @@ func TestRemoteTwoResourceExampleLifecycle(t *testing.T) {
 	require.ErrorIs(t, err, desire.ErrNotFound, "the parent must wait for the child")
 
 	desiretest.MarkDeleteDesireConfirmed(t, ctx, store, configMap.Delete())
-	result = run(true, "False", "False")
+	result = run(true, "False", "False", "False")
 	assert.Equal(t, executor.ResourceStateConfirmedDeleted, result.ExecutionContext.ResourceStates["configMap"])
 	_, err = store.GetDeleteDesire(ctx, namespace.Delete())
 	require.ErrorIs(t, err, desire.ErrNotFound, "the parent ran before the child confirmation in this event")
 
-	result = run(true, "False", "False")
+	result = run(true, "False", "False", "False")
 	assert.Equal(t, executor.ResourceStateConfirmedDeleted, result.ExecutionContext.ResourceStates["configMap"])
 	_, err = store.GetDeleteDesire(ctx, namespace.Delete())
 	require.NoError(t, err, "the parent should now be requested for deletion")
 
 	desiretest.MarkDeleteDesireConfirmed(t, ctx, store, namespace.Delete())
-	result = run(true, "False", "True")
+	result = run(true, "False", "False", "True")
 	assert.Equal(t, executor.ResourceStateConfirmedDeleted, result.ExecutionContext.ResourceStates["namespace"])
 	assert.Equal(t, executor.ResourceStateConfirmedDeleted, result.ExecutionContext.ResourceStates["configMap"])
 	_, err = store.GetDeleteDesire(ctx, namespace.Delete())

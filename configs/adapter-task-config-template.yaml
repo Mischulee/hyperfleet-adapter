@@ -13,6 +13,7 @@ params:
         timeout: 10s
   - name: generation
     source: clusterStatus.generation
+    type: int
   - name: is_deleting
     source:
       expression: "clusterStatus.?deleted_time.hasValue()"

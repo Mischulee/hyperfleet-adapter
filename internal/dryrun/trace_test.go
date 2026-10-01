@@ -62,23 +62,47 @@ func TestFormatText_Success(t *testing.T) {
 	})
 }
 
+// TestFormatText_ShowsRemoteTarget verifies that each resource shows its own
+// route and manifest when several resources render the same object.
 func TestFormatText_ShowsRemoteTarget(t *testing.T) {
-	trace := makeTestTrace(executor.StatusSuccess, false)
+	trace := makeTestTrace(executor.StatusSuccess, true)
 	trace.Result.ResourceResults = []executor.ResourceResult{
-		{Name: "remote", Kind: "ConfigMap", Namespace: "default", ResourceName: "remote-cm"},
-		{Name: "local", Kind: "ConfigMap", Namespace: "default", ResourceName: "local-cm"},
+		{Name: "onA", Kind: "ConfigMap", Namespace: "default", ResourceName: "shared"},
+		{Name: "onB", Kind: "ConfigMap", Namespace: "default", ResourceName: "shared"},
+		{Name: "local", Kind: "ConfigMap", Namespace: "default", ResourceName: "shared"},
 	}
 	gvk := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
 	trace.Transport.Records = []TransportRecord{
-		{Operation: operationApply, GVK: gvk, Namespace: "default", Name: "remote-cm",
-			TargetCluster: "cluster-x", TargetResource: "configmaps"},
-		{Operation: operationApply, GVK: gvk, Namespace: "default", Name: "local-cm"},
+		{Operation: operationApply, GVK: gvk, Namespace: "default", Name: "shared", Resource: "onA",
+			TargetCluster: "cluster-a", TargetResource: "configmaps", Manifest: []byte(`{"data":{"cluster":"a"}}`)},
+		{Operation: operationApply, GVK: gvk, Namespace: "default", Name: "shared", Resource: "onB",
+			TargetCluster: "cluster-b", TargetResource: "configmaps", Manifest: []byte(`{"data":{"cluster":"b"}}`)},
+		{Operation: operationApply, GVK: gvk, Namespace: "default", Name: "shared", Resource: "local",
+			Manifest: []byte(`{"data":{"cluster":"local"}}`)},
 	}
 
 	output := trace.FormatText()
+	require.Contains(t, output, "[3/3]")
+	_, rest, _ := strings.Cut(output, "[1/3]")
+	onA, rest, _ := strings.Cut(rest, "[2/3]")
+	onB, local, _ := strings.Cut(rest, "[3/3]")
 
-	assert.Equal(t, 1, strings.Count(output, "Target:"), "only the remote resource has a target")
-	assert.Contains(t, output, "Target: cluster cluster-x, resource configmaps")
+	assert.Contains(t, onA, "Target: cluster cluster-a, resource configmaps")
+	assert.Contains(t, onA, `"cluster": "a"`)
+	assert.Contains(t, onB, "Target: cluster cluster-b, resource configmaps")
+	assert.Contains(t, onB, `"cluster": "b"`)
+	assert.NotContains(t, local, "Target:")
+	assert.Contains(t, local, `"cluster": "local"`)
+
+	data, err := trace.FormatJSON()
+	require.NoError(t, err)
+	var parsed struct {
+		TransportOperations []TraceTransportOp `json:"transportOperations"`
+	}
+	require.NoError(t, json.Unmarshal(data, &parsed))
+	require.Len(t, parsed.TransportOperations, 3)
+	assert.Equal(t, "onB", parsed.TransportOperations[1].Resource)
+	assert.Equal(t, "cluster-b", parsed.TransportOperations[1].TargetCluster)
 }
 
 func TestFormatText_Failed(t *testing.T) {

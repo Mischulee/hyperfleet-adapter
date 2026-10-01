@@ -16,7 +16,7 @@
             "name": "abc123",
             "kind": "Cluster",
             "href": "/api/hyperfleet/v1/clusters/abc123",
-            "generation": "77",
+            "generation": 77,
             "nodes": {
               "compute": 3
             },

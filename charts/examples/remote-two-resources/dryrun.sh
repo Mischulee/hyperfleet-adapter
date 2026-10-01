@@ -20,9 +20,11 @@ dryrun_trace \
       and any(.transportOperations[]; .operation == "apply" and .kind == "ConfigMap")
       and ($body.conditions | any(.[]; .type == "Available" and .status == "True"))
     else
+      # A soft delete bumps the cluster generation (78) past the mirrors (77),
+      # so Available waits for the requested generation.
       any(.transportOperations[]; .operation == "delete" and .kind == "ConfigMap")
       and all(.transportOperations[]; .operation != "delete" or .kind != "Namespace")
-      and ($body.conditions | any(.[]; .type == "Available" and .status == "Unknown"))
+      and ($body.conditions | any(.[]; .type == "Available" and .status == "Unknown" and .reason == "GenerationPending"))
       and ($body.conditions | any(.[]; .type == "Finalized" and .reason == "CleanupInProgress"))
     end)
 '

@@ -17,10 +17,11 @@ clients:
     api_version: v1
 
 # A separately provisioned shared Redis store and remote applier are required.
+# The chart overrides this placeholder URL from the Redis Secret at startup.
 stores:
   remote-store:
     type: redis
-    url: redis://CHANGE_ME:6379
+    url: rediss://CHANGE_ME:6379
 transports:
   remote-primary:
     type: remote

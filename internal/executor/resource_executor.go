@@ -104,6 +104,7 @@ func (re *ResourceExecutor) executeResource(
 	resource configloader.Resource,
 	execCtx *ExecutionContext,
 ) (ResourceResult, error) {
+	ctx = transportclient.WithResourceName(ctx, resource.Name)
 	result := ResourceResult{
 		Name:   resource.Name,
 		Status: StatusSuccess,
@@ -620,7 +621,8 @@ func (re *ResourceExecutor) preDiscoverAll(
 			return NewExecutorError(PhaseResources, resource.Name, "failed to resolve transport", err)
 		}
 
-		discovered, err := re.discoverResource(ctx, resource, execCtx, transportClient, transportTarget)
+		discovered, err := re.discoverResource(
+			transportclient.WithResourceName(ctx, resource.Name), resource, execCtx, transportClient, transportTarget)
 		if err != nil {
 			if apierrors.IsNotFound(err) || errors.Is(err, desireclient.ErrNotSyncedYet) {
 				// Absent or not synced yet: leave it out of context. discoverResource

@@ -24,16 +24,8 @@ func TestShippedV2ConfigsLoad(t *testing.T) {
 			taskPath: "charts/examples/kubernetes/adapter-task-config.yaml", resources: 2,
 		},
 		{
-			name: "remote", adapterPath: "charts/examples/remote/adapter-config.yaml",
-			taskPath: "charts/examples/remote/adapter-task-config.yaml", resources: 1,
-		},
-		{
 			name: "two resources", adapterPath: "charts/examples/remote-two-resources/adapter-config.yaml",
 			taskPath: "charts/examples/remote-two-resources/adapter-task-config.yaml", resources: 2,
-		},
-		{
-			name: "remote fixture", adapterPath: "test/testdata/dryrun/remote/dryrun-remote-adapter-config.yaml",
-			taskPath: "test/testdata/dryrun/remote/dryrun-remote-task-config.yaml", resources: 1,
 		},
 	}
 

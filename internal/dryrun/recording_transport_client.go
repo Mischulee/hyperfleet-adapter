@@ -31,6 +31,10 @@ type TransportRecord struct {
 	Name      string
 	GVK       schema.GroupVersionKind
 	Operation string // operationApply, operationGet, operationDiscover
+	// Resource is the task config resource name the call was made for, from
+	// transportclient.WithResourceName. It stays unique when two resources
+	// render the same object, on the same route or on different ones.
+	Resource string
 	// TargetCluster and TargetResource are the remote route's resolved cluster and
 	// resource plural, empty for the local Kubernetes route. They make the route
 	// the executor selected observable in a dry-run trace.
@@ -39,19 +43,32 @@ type TransportRecord struct {
 	Manifest       []byte
 }
 
-// newRecord builds a TransportRecord, copying the routing identity from a remote
-// route's *desireclient.TransportContext. The local Kubernetes route passes nil.
+// routeTarget reports whether target is a remote route, and the cluster and
+// resource plural it routes to. A remote route passes a non-nil
+// *desireclient.TransportContext; the local Kubernetes route passes nil.
+// TODO(HYPERFLEET-1504): Maestro contexts are treated as local in dry runs,
+// omitting the consumer from traces and simulating deletion synchronously.
+func routeTarget(target transportclient.TransportContext) (cluster, resource string, remote bool) {
+	if tc, ok := target.(*desireclient.TransportContext); ok && tc != nil {
+		return tc.ManagementCluster, tc.Resource, true
+	}
+	return "", "", false
+}
+
+// newRecord builds a TransportRecord for the resource named in ctx, copying the
+// routing identity from a remote route's target.
 func newRecord(
+	ctx context.Context,
 	operation string,
 	gvk schema.GroupVersionKind,
 	namespace, name string,
 	target transportclient.TransportContext,
 ) TransportRecord {
-	record := TransportRecord{Operation: operation, GVK: gvk, Namespace: namespace, Name: name}
-	if tc, ok := target.(*desireclient.TransportContext); ok && tc != nil {
-		record.TargetCluster = tc.ManagementCluster
-		record.TargetResource = tc.Resource
+	record := TransportRecord{
+		Operation: operation, GVK: gvk, Namespace: namespace, Name: name,
+		Resource: transportclient.ResourceNameFromContext(ctx),
 	}
+	record.TargetCluster, record.TargetResource, _ = routeTarget(target)
 	return record
 }
 
@@ -111,11 +128,9 @@ func (c *DryrunTransportClient) ApplyResource(
 	// Parse manifest
 	obj := &unstructured.Unstructured{}
 	if err := json.Unmarshal(manifestBytes, &obj.Object); err != nil {
-		record := TransportRecord{
-			Operation: operationApply,
-			Manifest:  manifestBytes,
-			Error:     fmt.Errorf("failed to parse manifest: %w", err),
-		}
+		record := newRecord(ctx, operationApply, schema.GroupVersionKind{}, "", "", target)
+		record.Manifest = manifestBytes
+		record.Error = fmt.Errorf("failed to parse manifest: %w", err)
 		c.Records = append(c.Records, record)
 		return nil, record.Error
 	}
@@ -124,6 +139,19 @@ func (c *DryrunTransportClient) ApplyResource(
 	namespace := obj.GetNamespace()
 	name := obj.GetName()
 	key := resourceKey(gvk, namespace, name)
+
+	// The remote client rejects a manifest without a valid generation annotation.
+	// Check the rendered manifest before a discovery override replaces it, so the
+	// dry run fails where the real client would.
+	if _, _, remote := routeTarget(target); remote {
+		if err := manifest.ValidateGenerationFromUnstructured(obj); err != nil {
+			record := newRecord(ctx, operationApply, gvk, namespace, name, target)
+			record.Manifest = manifestBytes
+			record.Error = fmt.Errorf("invalid manifest generation: %w", err)
+			c.Records = append(c.Records, record)
+			return nil, record.Error
+		}
+	}
 
 	// Determine operation: create or update
 	var operation manifest.Operation
@@ -154,7 +182,7 @@ func (c *DryrunTransportClient) ApplyResource(
 		Reason:    fmt.Sprintf("dry-run %s", operation),
 	}
 
-	record := newRecord(operationApply, gvk, namespace, name, target)
+	record := newRecord(ctx, operationApply, gvk, namespace, name, target)
 	record.Manifest = manifestBytes
 	record.Result = result
 	c.Records = append(c.Records, record)
@@ -175,7 +203,7 @@ func (c *DryrunTransportClient) GetResource(
 	key := resourceKey(gvk, namespace, name)
 	obj, exists := c.resources[key]
 
-	c.Records = append(c.Records, newRecord(operationGet, gvk, namespace, name, target))
+	c.Records = append(c.Records, newRecord(ctx, operationGet, gvk, namespace, name, target))
 
 	if !exists {
 		return nil, apierrors.NewNotFound(
@@ -208,7 +236,7 @@ func (c *DryrunTransportClient) DeleteResource(
 
 	key := resourceKey(gvk, namespace, name)
 	_, exists := c.resources[key]
-	if target != nil {
+	if _, _, remote := routeTarget(target); remote {
 		// Remote route: async deletion — mark with deletionTimestamp, keep in store.
 		if exists {
 			now := metav1.NewTime(time.Now())
@@ -223,7 +251,7 @@ func (c *DryrunTransportClient) DeleteResource(
 		delete(c.resources, key)
 	}
 
-	c.Records = append(c.Records, newRecord(operationDelete, gvk, namespace, name, target))
+	c.Records = append(c.Records, newRecord(ctx, operationDelete, gvk, namespace, name, target))
 
 	return nil
 }
@@ -239,7 +267,7 @@ func (c *DryrunTransportClient) DiscoverResources(
 	defer c.mu.Unlock()
 
 	c.Records = append(c.Records,
-		newRecord(operationDiscover, gvk, discovery.GetNamespace(), discovery.GetName(), target))
+		newRecord(ctx, operationDiscover, gvk, discovery.GetNamespace(), discovery.GetName(), target))
 
 	list := &unstructured.UnstructuredList{}
 

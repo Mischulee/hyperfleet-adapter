@@ -17,4 +17,4 @@ clients:
 
 # The local-only task in adapter-task-config-template.yaml needs no store or
 # named transport. For a remote task, add a shared store and named route as in
-# charts/examples/remote/adapter-config.yaml.
+# charts/examples/remote-two-resources/adapter-config.yaml.

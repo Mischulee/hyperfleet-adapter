@@ -11,9 +11,11 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/desireclient"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/manifest"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/transportclient"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/constants"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -342,6 +344,106 @@ func TestDiscoverResources_EmptyStore(t *testing.T) {
 // Kubernetes route passes nil.
 var remoteRoute = &desireclient.TransportContext{ManagementCluster: "cluster-x", Resource: "configmaps"}
 
+// makeRemoteManifest is makeManifest plus the generation annotation the remote
+// client requires.
+func makeRemoteManifest(apiVersion, kind, namespace, name string) []byte {
+	obj := &unstructured.Unstructured{}
+	_ = json.Unmarshal(makeManifest(apiVersion, kind, namespace, name), &obj.Object)
+	obj.SetAnnotations(map[string]string{constants.AnnotationGeneration: "1"})
+	data, _ := json.Marshal(obj.Object)
+	return data
+}
+
+// TestApplyResource_Remote_RequiresGeneration verifies that a remote route rejects
+// a manifest without the generation annotation, as the real remote client does,
+// even when a discovery override would replace the stored object.
+func TestApplyResource_Remote_RequiresGeneration(t *testing.T) {
+	ctx := context.Background()
+	overrides := DiscoveryOverrides{
+		"my-cm": {
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]interface{}{
+				"name":        "my-cm",
+				"namespace":   "default",
+				"annotations": map[string]interface{}{constants.AnnotationGeneration: "1"},
+			},
+		},
+	}
+	client := NewDryrunTransportClientWithOverrides(overrides)
+
+	_, err := client.ApplyResource(ctx, makeManifest("v1", "ConfigMap", "default", "my-cm"), nil, remoteRoute)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), constants.AnnotationGeneration)
+	require.Len(t, client.Records, 1)
+	assert.Equal(t, err, client.Records[0].Error)
+
+	_, err = client.ApplyResource(ctx, makeRemoteManifest("v1", "ConfigMap", "default", "my-cm"), nil, remoteRoute)
+	require.NoError(t, err)
+
+	// The local client does not require the annotation.
+	_, err = client.ApplyResource(ctx, makeManifest("v1", "ConfigMap", "default", "local-cm"), nil, nil)
+	require.NoError(t, err)
+}
+
+// TestApplyResource_ParseFailureRecordsRoute verifies that a manifest that fails
+// to parse still records its resource and route, like every other record.
+func TestApplyResource_ParseFailureRecordsRoute(t *testing.T) {
+	ctx := transportclient.WithResourceName(context.Background(), "config")
+	client := NewDryrunTransportClient()
+
+	_, err := client.ApplyResource(ctx, []byte("{invalid-json"), nil, remoteRoute)
+	require.Error(t, err)
+	require.Len(t, client.Records, 1)
+	r := client.Records[0]
+	assert.Equal(t, operationApply, r.Operation)
+	assert.Equal(t, "config", r.Resource)
+	assert.Equal(t, "cluster-x", r.TargetCluster)
+	assert.Equal(t, "configmaps", r.TargetResource)
+	assert.Equal(t, err, r.Error)
+}
+
+// TestDeleteResource_RouteSemantics verifies that delete and apply agree on what
+// a remote route is: a typed-nil remote context is the local route.
+func TestDeleteResource_RouteSemantics(t *testing.T) {
+	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	var typedNil *desireclient.TransportContext
+
+	tests := []struct {
+		target    transportclient.TransportContext
+		name      string
+		wantRoute string
+		wantKept  bool
+	}{
+		{name: "desire route", target: remoteRoute, wantKept: true, wantRoute: "cluster-x"},
+		{name: "typed-nil desire route", target: typedNil},
+		{name: "local route", target: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			client := NewDryrunTransportClient()
+			_, err := client.ApplyResource(ctx, makeManifest("v1", "ConfigMap", "default", "my-cm"), nil, nil)
+			require.NoError(t, err)
+
+			require.NoError(t, client.DeleteResource(ctx, gvk, "default", "my-cm", nil, tt.target))
+			last := client.Records[len(client.Records)-1]
+			assert.Equal(t, operationDelete, last.Operation)
+			assert.Equal(t, tt.wantRoute, last.TargetCluster)
+
+			disc := &testDiscovery{namespace: "default", name: "my-cm", singleResource: true}
+			list, err := client.DiscoverResources(ctx, gvk, disc, nil)
+			require.NoError(t, err)
+			if tt.wantKept {
+				require.Len(t, list.Items, 1)
+				assert.NotNil(t, list.Items[0].GetDeletionTimestamp())
+			} else {
+				assert.Empty(t, list.Items)
+			}
+		})
+	}
+}
+
 func TestDeleteResource_Kubernetes_RemovesFromStore(t *testing.T) {
 	ctx := context.Background()
 	client := NewDryrunTransportClient()
@@ -435,12 +537,12 @@ func TestDeleteResource_WithOverrides_Remote_SetsDeleteTimestamp(t *testing.T) {
 // route records its target cluster and resource plural, and the local route
 // records neither.
 func TestRecords_RemoteRouteRecorded(t *testing.T) {
-	ctx := context.Background()
+	ctx := transportclient.WithResourceName(context.Background(), "config")
 	client := NewDryrunTransportClient()
 	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
 
 	// apply, get, discover, delete all through the remote route.
-	_, err := client.ApplyResource(ctx, makeManifest("v1", "ConfigMap", "default", "my-cm"), nil, remoteRoute)
+	_, err := client.ApplyResource(ctx, makeRemoteManifest("v1", "ConfigMap", "default", "my-cm"), nil, remoteRoute)
 	require.NoError(t, err)
 	_, err = client.GetResource(ctx, gvk, "default", "my-cm", remoteRoute)
 	require.NoError(t, err)
@@ -451,6 +553,7 @@ func TestRecords_RemoteRouteRecorded(t *testing.T) {
 
 	require.Len(t, client.Records, 4)
 	for _, r := range client.Records {
+		assert.Equal(t, "config", r.Resource, "op %q must record the task config resource", r.Operation)
 		assert.Equal(t, "cluster-x", r.TargetCluster, "op %q must record the remote target cluster", r.Operation)
 		assert.Equal(t, "configmaps", r.TargetResource, "op %q must record the remote target resource", r.Operation)
 	}

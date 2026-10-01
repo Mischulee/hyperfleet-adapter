@@ -10,6 +10,10 @@ For named remote transports, see the [remote examples](../charts/examples/README
 Task config is YAML only; deployment config supports environment and flag
 overrides.
 
+<!-- TODO(HYPERFLEET-1448): this skeleton covers one local task only. Link the
+v2 field reference here once docs/configuration.md and the authoring guide
+describe named transports, preconditions, captures and by_selectors. -->
+
 ## Broker configuration
 
 This directory contains ConfigMap templates and examples for configuring the hyperfleet-adapter broker consumer.
@@ -40,11 +44,10 @@ data:
 Also set the adapter broker settings in the deployment config:
 
 ```yaml
-spec:
-  clients:
-    broker:
-      subscriptionId: "your-subscription-name"
-      topic: "your-topic-name"
+clients:
+  broker:
+    subscription_id: "your-subscription-name"
+    topic: "your-topic-name"
 ```
 
 ### 3. Apply the ConfigMap

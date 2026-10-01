@@ -10,11 +10,11 @@ No cluster, broker, or API needed. Dry-run mode processes a CloudEvent from a JS
 
 ```bash
 go run ./cmd/adapter/main.go serve \
-  --config test/testdata/dryrun/dryrun-kubernetes-adapter-config.yaml \
-  --task-config test/testdata/dryrun/kubernetes/dryrun-kubernetes-task-config.yaml \
+  --config charts/examples/kubernetes/adapter-config.yaml \
+  --task-config charts/examples/kubernetes/adapter-task-config.yaml \
   --dry-run-event test/testdata/dryrun/event.json \
   --dry-run-api-responses test/testdata/dryrun/dryrun-api-responses.json \
-  --dry-run-discovery test/testdata/dryrun/kubernetes/dryrun-kubernetes-discovery.json \
+  --dry-run-discovery charts/examples/kubernetes/dryrun-discovery.json \
   --dry-run-verbose
 ```
 
