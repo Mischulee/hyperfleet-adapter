@@ -1,0 +1,29 @@
+adapterConfig:
+  create: true
+  files:
+    adapter-config.yaml: examples/remote-two-resources/adapter-config.yaml
+adapterTaskConfig:
+  create: true
+  files:
+    task-config.yaml: examples/remote-two-resources/adapter-task-config.yaml
+    namespace.yaml: examples/remote-two-resources/namespace.yaml
+    configmap.yaml: examples/remote-two-resources/configmap.yaml
+broker:
+  create: true
+  type: googlepubsub
+  googlepubsub:
+    projectId: CHANGE_ME
+    subscriptionId: CHANGE_ME
+    topic: CHANGE_ME
+    deadLetterTopic: CHANGE_ME
+image:
+  registry: CHANGE_ME
+  repository: hyperfleet-adapter
+  pullPolicy: Always
+  tag: latest
+env:
+  - name: HYPERFLEET_STORES_REMOTE_STORE_URL
+    valueFrom:
+      secretKeyRef:
+        name: CHANGE_ME-redis
+        key: url

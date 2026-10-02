@@ -314,7 +314,7 @@ go test -v ./internal/criteria/... -run Integration
 
 ## Configuration Template Examples
 
-See `configs/adapter-task-config-template.yaml` for examples of condition usage:
+See the [adapter authoring guide](../../docs/adapter-authoring-guide.md#5-preconditions) for precondition usage. Example conditions:
 
 ```yaml
 preconditions:

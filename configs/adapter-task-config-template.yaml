@@ -1,386 +1,116 @@
-# HyperFleet Adapter Task Configuration Template
-#
-# This is a starting-point template for configuring cloud provider adapters
-# using the HyperFleet Adapter Framework with CEL (Common Expression Language).
-#
-# WORKING EXAMPLES:
-# =================
-# Before writing your own config, study these complete, tested examples:
-#
-#   charts/examples/kubernetes/   — Direct K8s resources (Namespace + Job)
-#                                   with lifecycle.delete and dependency ordering
-#   charts/examples/maestro/      — Single ManifestWork with nested discoveries
-#                                   and Maestro-specific status feedback
-#   charts/examples/maestro-two-resources/
-#                                 — Two ManifestWorks with deletion dependency
-#                                   ordering (!resources.?X.hasValue())
-#
-# DOCUMENTATION:
-# ==============
-# Full authoring guide:  docs/adapter-authoring-guide.md
-# CEL quick reference:   docs/adapter-authoring-guide.md#appendix-a-cel-quick-reference
-# CEL conventions:       docs/conventions/cel.md
-#
-# TEMPLATE SYNTAX:
-# ================
-# 1. Go Templates ({{ .var }}) - Variable interpolation throughout
-# 2. field: "path" - Simple JSON path extraction (translated to CEL internally)
-# 3. expression: "cel" - Full CEL expressions for complex logic
-#
-# CONDITION SYNTAX:
-# =================
-# Option 1: CEL expression (direct field on precondition)
-#   expression: |
-#     reconciledConditionStatus == "False"
-#
-# Option 2: Structured conditions (direct field on precondition)
-#   conditions:
-#     - field: "reconciledConditionStatus"
-#       operator: "equals"
-#       value: "Terminating"
-#
-# Supported operators: equals, notEquals, in, notIn, contains, greaterThan, lessThan, exists
-#
-# CEL OPTIONAL CHAINING:
-# ======================
-# Use optional chaining with orValue() to safely access potentially missing fields:
-#   resources.?clusterNamespace.?status.?phase.orValue("")
-#   adapter.?executionStatus.orValue("")
-#
-# Copy this file to your adapter repository and customize for your needs.
-
-# ============================================================================
-# Global params
-# ============================================================================
-# params to extract from CloudEvent and environment variables
-#
-# SUPPORTED TYPES:
-# ================
-# - string: Default, any value converted to string
-# - int/int64: Integer value (strings parsed, floats truncated)
-# - float/float64: Floating point value
-# - bool: Boolean (supports: true/false, yes/no, on/off, 1/0)
-#
+# V2 task config. A resource with no transport uses local Kubernetes.
+schema_version: "2.0"
 params:
-  # Environment variables from deployment
-  - name: "hyperfleetApiBaseUrl"
-    source: "env.HYPERFLEET_API_BASE_URL"
-    type: "string"
-    description: "Base URL for the HyperFleet API"
+  - name: clusterId
+    source: event.id
+    type: string
     required: true
-
-  - name: "hyperfleetApiVersion"
-    source: "env.HYPERFLEET_API_VERSION"
-    type: "string"
-    default: "v1"
-    description: "API version to use"
-
-  # Extract from CloudEvent data
-  - name: "clusterId"
-    source: "event.id"
-    type: "string"
-    description: "Unique identifier for the target cluster"
-    required: true
-
-  # Example: Extract and convert to int
-  # - name: "nodeCount"
-  #   source: "event.spec.nodeCount"
-  #   type: "int"
-  #   default: 3
-  #   description: "Number of nodes in the cluster"
-
-  # Example: Extract and convert to bool
-  # - name: "enableFeature"
-  #   source: "env.ENABLE_FEATURE"
-  #   type: "bool"
-  #   default: false
-  #   description: "Enable experimental feature"
-
-  # API call source fetches data from the HyperFleet API as a named param.
-  # The full JSON response is stored under the param name and can be referenced
-  # by later params using dot-notation (e.g. "clusterData.generation")
-  - name: "clusterData"
+  - name: clusterStatus
     source:
       api_call:
-        method: "GET"
-        # The adapter prepends /api/hyperfleet/<version> automatically for relative paths
-        # Full paths (/api/hyperfleet/v1/...) are also accepted
-        url: "/clusters/{{ .clusterId }}"
+        method: GET
+        url: /clusters/{{ .clusterId }}
         timeout: 10s
-        retry_attempts: 3
-        retry_backoff: "exponential"
-
-  # Derivation from an api_call param
-  - name: "clusterName"
-    source: "clusterData.name"
-
-  # CEL expression source - evaluate over previously resolved params
-  # Expressions see all params resolved so far as top-level variables
-  - name: "reconciledConditionStatus"
+  - name: generation
+    source: clusterStatus.generation
+    type: int
+  - name: is_deleting
     source:
-      expression: |
-        clusterData.status.conditions.filter(c, c.type == "Reconciled").size() > 0
-          ? clusterData.status.conditions.filter(c, c.type == "Reconciled")[0].status
-          : "False"
+      expression: "clusterStatus.?deleted_time.hasValue()"
 
-  - name: "generationId"
-    source: "clusterData.generation"
-
-  # File source reads a value from a filesystem path at reconciliation time.
-  # The file is read fresh on every event (tokens rotate). Whitespace is
-  # trimmed by default (trim: true).
-  # - name: "k8sToken"
-  #   source:
-  #     file:
-  #       path: "/var/run/secrets/kubernetes.io/serviceaccount/token"
-  #       trim: true
-  #   required: true
-  #   description: "Kubernetes service account token"
-
-  # DELETION SUPPORT — capture these two params when lifecycle.delete is used
-  # deleted_time: raw timestamp from the API (null when resource is not pending deletion).
-  # is_deleting: boolean convenience variable — use this in lifecycle.when expressions
-  #              and payload conditions instead of repeating "clusterData.?deleted_time.hasValue()".
-  # - name: "deleted_time"
-  #   source: "clusterData.deleted_time"
-  # - name: "is_deleting"
-  #   source:
-  #     expression: "clusterData.?deleted_time.hasValue()"
-
-
-# ============================================================================
-# Global Preconditions
-# ============================================================================
-# Preconditions decide whether the Resources phase executes
-# Expressions have access to all resolved params and adapter metadata
-preconditions:
-  # ==========================================================================
-  # Validate cluster state
-  # ==========================================================================
-  - name: "clusterStatus"
-    # Conditions to check using params resolved above
-    conditions:
-      # Using param derived from clusterData
-      - field: "reconciledConditionStatus"
-        operator: "equals"
-        value: "True"
-
-      # Or check a numeric field
-      # - field: "clusterData.generation"
-      #   operator: "greaterThan"
-      #   value: 0
-
-    # Alternative: CEL expression with full access to all params
-    # expression: |
-    #   reconciledConditionStatus == "True" && clusterData.generation > 0
-
-# ============================================================================
-# Resources (Create/Update Resources)
-# ============================================================================
-# All resources are created/updated sequentially in the order defined below
 resources:
-  # ==========================================================================
-  # Resource 1: Cluster Namespace
-  # ==========================================================================
-  - name: "clusterNamespace"
+  - name: namespace
     manifest:
       apiVersion: v1
       kind: Namespace
       metadata:
         name: "{{ .clusterId }}"
-        labels:
-          hyperfleet.io/cluster-id: "{{ .clusterId }}"
-          hyperfleet.io/managed-by: "{{ .adapter.name }}"
-          hyperfleet.io/resource-type: "namespace"
         annotations:
-          hyperfleet.io/created-by: "hyperfleet-adapter"
-          hyperfleet.io/generation: "{{ .generationId }}"
+          hyperfleet.io/generation: "{{ .generation }}"
     discovery:
-      # The "namespace" field within discovery is optional:
-      # - For namespaced resources: set namespace to target the specific namespace
-      # - For cluster-scoped resources (like Namespace, ClusterRole): omit or leave empty
-      # Here we omit it since Namespace is cluster-scoped
-      by_selectors:
-        label_selector:
-          hyperfleet.io/resource-type: "namespace"
-          hyperfleet.io/cluster-id: "{{ .clusterId }}"
-          hyperfleet.io/managed-by: "{{ .adapter.name }}"
+      by_name: "{{ .clusterId }}"
+    lifecycle:
+      delete:
+        when:
+          expression: "is_deleting"
 
-    # OPTIONAL: Gate resource CREATION with a CEL expression
-    # If the expression evaluates to false, the resource is not created.
-    # Once created, this condition is ignored in subsequent reconciliations.
-    # While resource is not yet created, with each reconciliation, this expression is evaluated again.
-    #
-    # lifecycle:
-    #   create:
-    #     when:
-    #       expression: "params.?enableOptionalFeature.orValue(false)"
-
-    # --------------------------------------------------------------------------
-    # OPTIONAL: Deletion lifecycle
-    # --------------------------------------------------------------------------
-    # Uncomment the block below to enable deletion for this resource.
-    # Requires capturing `deleted_time` (and optionally `is_deleting`) in
-    # preconditions, and adding a `Finalized` condition to the status payload.
-    #
-    # lifecycle:
-    #   delete:
-    #     # propagationPolicy controls how Kubernetes removes dependent objects.
-    #     # Background (default): async GC. Foreground: block until dependents gone.
-    #     # Orphan: remove owner, leave dependents. Ignored for Maestro transport.
-    #     propagationPolicy: Background
-    #     when:
-    #       # Expression is evaluated each reconciliation. Resource is deleted only
-    #       # when it evaluates to true.
-    #       # Use `is_deleting` (captured as `has(clusterStatus.deleted_time)` in preconditions)
-    #       # combined with dependency guards for multi-resource ordering:
-    #       #   expression: "is_deleting"                                    # single resource
-    #       #   expression: "is_deleting && !resources.?dep.hasValue()"  # wait for dep
-    #       expression: "is_deleting"
-
-
-# ============================================================================
-# Post-Processing
-# ============================================================================
 post:
   payloads:
-    # Build status payload inline
-    - name: "clusterStatusPayload"
+    - name: clusterStatusPayload
       build:
-        # Adapter name for tracking which adapter reported this status
         adapter: "{{ .adapter.name }}"
-
-        # Conditions array - each condition has type, status, reason, message
-        # Use CEL optional chaining ?.orValue() for safe field access
         conditions:
-          # Applied: Resources successfully created
-          - type: "Applied"
+          - type: Applied
             status:
-              expression: |
-                resources.?clusterNamespace.?status.?phase.orValue("") == "Active" ? "True" : "False"
+              expression: 'resource_states.?namespace.orValue("") == "present" ? "True" : "False"'
             reason:
-              expression: |
-                resources.?clusterNamespace.?status.?phase.orValue("") == "Active"
-                  ? "NamespaceCreated"
-                  : "NamespacePending"
+              expression: 'resource_states.?namespace.orValue("") == "present" ? "NamespaceApplied" : "NamespacePending"'
             message:
               expression: |
-                resources.?clusterNamespace.?status.?phase.orValue("") == "Active"
-                  ? "Namespace created successfully"
-                  : "Namespace creation in progress"
-
-          # Available: Resources are active and ready
-          - type: "Available"
+                resource_states.?namespace.orValue("") == "present"
+                  ? "Namespace applied" : "Namespace not applied yet"
+          - type: Available
             status:
-              expression: |
-                resources.?clusterNamespace.?status.?phase.orValue("") == "Active" ? "True" : "False"
+              expression: 'resources.?namespace.?status.?phase.orValue("") == "Active" ? "True" : "False"'
             reason:
-              expression: |
-                resources.?clusterNamespace.?status.?phase.orValue("") == "Active" ? "NamespaceReady" : "NamespaceNotReady"
+              expression: 'resources.?namespace.?status.?phase.orValue("") == "Active" ? "NamespaceActive" : "NamespaceNotActive"'
             message:
               expression: |
-                resources.?clusterNamespace.?status.?phase.orValue("") == "Active" ? "Namespace is active and ready" : "Namespace is not active and ready"
-
-          # Health: Adapter execution status (runtime) Don't need to update this. This can be reused from the adapter config.
-          - type: "Health"
+                "Namespace phase: " + resources.?namespace.?status.?phase.orValue("unknown")
+          - type: Health
             status:
               expression: |
-                adapter.?executionStatus.orValue("") == "success" ? "True" : (adapter.?executionStatus.orValue("") == "failed" ? "False" : "Unknown")
+                adapter.?executionStatus.orValue("") == "success"
+                  && !adapter.?resourcesSkipped.orValue(false)
+                  ? "True" : "False"
             reason:
               expression: |
-                has(adapter.executionError) && adapter.executionError != null ? "ExecutionFailed" : (adapter.?errorReason.orValue("") != "" ? adapter.?errorReason.orValue("") : (adapter.?resourcesSkipped.orValue(false) ? "ResourcesSkipped" : "Healthy"))
+                adapter.?executionStatus.orValue("") != "success"
+                  ? "ExecutionFailed:" + adapter.?executionError.?phase.orValue("unknown")
+                  : adapter.?resourcesSkipped.orValue(false) ? "ResourcesSkipped" : "Healthy"
             message:
               expression: |
-                has(adapter.executionError) && adapter.executionError != null && adapter.executionError.message != "" ? adapter.executionError.message : (adapter.?errorMessage.orValue("") != "" ? adapter.?errorMessage.orValue("") : (adapter.?resourcesSkipped.orValue(false) ? "Some resources were skipped" : "All adapter operations completed successfully"))
-
-          # Finalized: required condition that signals deletion cleanup to the API.
-          #
-          # WHEN THIS ADAPTER HAS NO DELETION FLOW — use static values (below):
-          - type: "Finalized"
-            status: "False"
-            reason: "NotDeleting"
-            message: "No pending deletion for this adapter instance"
-
-          # WHEN THIS ADAPTER HANDLES DELETION — replace the block above with the
-          # pattern below. Requires `deleted_time` + `is_deleting` captured in preconditions
-          # and `lifecycle.delete` configured on each managed resource.
-          #
-          # Three-part guard:
-          #   1. is_deleting     — only report True when deletion is actually pending;
-          #                        prevents false Finalized=True on first reconciliation
-          #                        before resources exist
-          #   2. executionStatus — prevents false True when executor failed before processing
-          #                        all resources (unprocessed keys absent → hasValue()=false)
-          #   3. resources gone  — every managed resource confirmed gone via hasValue()
-          #
-          # Use !resources.?X.hasValue() to check absence — NOT == null:
-          #   Deleted resources are excluded from the CEL map (nil sentinels are skipped by
-          #   GetCELVariables). resources.?X.hasValue() returns false whether the key is absent
-          #   because the resource was deleted, was never processed, or the executor failed
-          #   before reaching it. Direct == null fails if the key was never added at all.
-          #
-          # - type: "Finalized"
-          #   status:
-          #     expression: |
-          #       is_deleting
-          #         && adapter.?executionStatus.orValue("") == "success"
-          #         && !resources.?clusterNamespace.hasValue()
-          #       ? "True" : "False"
-          #   reason:
-          #     expression: |
-          #       !is_deleting
-          #       ? ""
-          #       : adapter.?executionStatus.orValue("") != "success"
-          #         ? "AdapterUnhealthy"
-          #         : !resources.?clusterNamespace.hasValue()
-          #           ? "CleanupConfirmed"
-          #           : "CleanupInProgress"
-          #   message:
-          #     expression: |
-          #       !is_deleting
-          #       ? ""
-          #       : adapter.?executionStatus.orValue("") != "success"
-          #         ? "Cannot confirm cleanup while adapter is unhealthy"
-          #         : !resources.?clusterNamespace.hasValue()
-          #           ? "All managed resources deleted and verified"
-          #           : "Resource cleanup in progress"
-
-        # Use CEL expression for numeric fields to preserve type (not Go template which outputs strings)
+                adapter.?executionStatus.orValue("") != "success"
+                  ? "Adapter failed at phase ["
+                      + adapter.?executionError.?phase.orValue("unknown")
+                      + "] step ["
+                      + adapter.?executionError.?step.orValue("unknown")
+                      + "]: "
+                      + adapter.?executionError.?message.orValue(adapter.?errorMessage.orValue("no details"))
+                  : adapter.?resourcesSkipped.orValue(false)
+                    ? "Resources skipped: " + adapter.?skipReason.orValue("unknown reason")
+                    : "Adapter execution completed successfully"
+          - type: Finalized
+            status:
+              expression: |
+                is_deleting
+                  && adapter.?executionStatus.orValue("") == "success"
+                  && !adapter.?resourcesSkipped.orValue(false)
+                  && resource_states.?namespace.orValue("") == "confirmed_deleted"
+                  ? "True" : "False"
+            reason:
+              expression: |
+                !is_deleting ? ""
+                  : adapter.?executionStatus.orValue("") != "success" ? "AdapterUnhealthy"
+                  : resource_states.?namespace.orValue("") == "confirmed_deleted" ? "CleanupConfirmed"
+                  : "CleanupInProgress"
+            message:
+              expression: |
+                !is_deleting ? ""
+                  : adapter.?executionStatus.orValue("") != "success"
+                    ? "Cannot confirm cleanup while the adapter is unhealthy"
+                    : resource_states.?namespace.orValue("") == "confirmed_deleted"
+                      ? "Namespace deletion confirmed"
+                      : "Waiting for confirmed Namespace deletion"
         observed_generation:
-          expression: "generationId"
-
-        # Use Go template with now and date functions for timestamps
-        observed_time: "{{ now | date \"2006-01-02T15:04:05Z07:00\" }}"
-
-        # Optional data field for adapter-specific metrics extracted from resources
-        data:
-          namespace:
-            name:
-              expression: |
-                resources.?clusterNamespace.?metadata.?name.orValue("")
-            status:
-              expression: |
-                resources.?clusterNamespace.?status.?phase.orValue("")
-
-  # ============================================================================
-  # Post Actions
-  # ============================================================================
-  # Post actions are executed after resources are created/updated
+          expression: generation
+        observed_time: '{{ now | date "2006-01-02T15:04:05Z07:00" }}'
   post_actions:
-    # Report cluster status to HyperFleet API.
-    # Skipped when the adapter did no work (preconditions not met / resources skipped)
-    # to avoid overwriting a previously reported status with stale data.
-    - name: "reportClusterStatus"
-      when:
-        expression: "!adapter.resourcesSkipped"
+    - name: reportClusterStatus
       api_call:
-        method: "PUT"
-        # NOTE: API path includes /api/hyperfleet/ prefix and ends with /statuses
-        url: "/clusters/{{ .clusterId }}/statuses"
-        body: "{{ .clusterStatusPayload }}"
-        timeout: 30s
-        retry_attempts: 3
-        retry_backoff: "exponential"
+        method: PUT
+        url: /clusters/{{ .clusterId }}/statuses
         headers:
-          - name: "Content-Type"
-            value: "application/json"
+          - name: Content-Type
+            value: application/json
+        body: "{{ .clusterStatusPayload }}"

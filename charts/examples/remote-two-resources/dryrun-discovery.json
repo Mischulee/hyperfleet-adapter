@@ -1,0 +1,29 @@
+{
+  "abc123-remote": {
+    "apiVersion": "v1",
+    "kind": "Namespace",
+    "metadata": {
+      "name": "abc123-remote",
+      "annotations": {
+        "hyperfleet.io/generation": "77"
+      }
+    },
+    "status": {
+      "phase": "Active"
+    }
+  },
+  "cluster-config": {
+    "apiVersion": "v1",
+    "kind": "ConfigMap",
+    "metadata": {
+      "name": "cluster-config",
+      "namespace": "abc123-remote",
+      "annotations": {
+        "hyperfleet.io/generation": "77"
+      }
+    },
+    "data": {
+      "cluster_id": "abc123"
+    }
+  }
+}

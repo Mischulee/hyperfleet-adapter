@@ -74,9 +74,7 @@ func TestLoadDryrunResponses_ValidFile(t *testing.T) {
 
 	t.Run("real testdata file", func(t *testing.T) {
 		testdataPath := filepath.Join("..", "..", "test", "testdata", "dryrun", "dryrun-api-responses.json")
-		if _, err := os.Stat(testdataPath); os.IsNotExist(err) {
-			t.Skipf("testdata file not found at %s", testdataPath)
-		}
+		require.FileExists(t, testdataPath)
 
 		result, err := LoadDryrunResponses(testdataPath)
 		require.NoError(t, err)

@@ -105,6 +105,33 @@ transports:
 	)
 }
 
+func TestLoadConfigOverridesNamedStoreURLFromEnvironment(t *testing.T) {
+	t.Setenv("HYPERFLEET_STORES_REMOTE_STORE_URL", "rediss://adapter:secret@redis.example.com:6379/0")
+	adapterPath, taskPath := createTestConfigFiles(t, t.TempDir(), `
+adapter:
+  name: test-adapter
+stores:
+  remote-store:
+    type: redis
+    url: rediss://CHANGE_ME:6379
+transports:
+  remote-primary:
+    type: remote
+    store: remote-store
+    target_cluster: cluster-1
+    resource_plurals:
+      "v1/ConfigMap": configmaps
+`, `{}`)
+
+	config, err := LoadConfig(
+		WithAdapterConfigPath(adapterPath),
+		WithTaskConfigPath(taskPath),
+		WithSkipSemanticValidation(),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "rediss://adapter:secret@redis.example.com:6379/0", config.Stores["remote-store"].URL)
+}
+
 func TestConfigRedactedRedactsRedisPasswordWithoutMutatingOriginal(t *testing.T) {
 	config := &Config{
 		Stores: map[string]StoreDefinition{

@@ -9,14 +9,11 @@ adapterTaskConfig:
   create: true
   files:
     task-config.yaml: examples/kubernetes/adapter-task-config.yaml
-    job.yaml: examples/kubernetes/adapter-task-resource-job.yaml
-    job-serviceaccount.yaml: examples/kubernetes/adapter-task-resource-job-serviceaccount.yaml
-    job-role.yaml: examples/kubernetes/adapter-task-resource-job-role.yaml
-    job-rolebinding.yaml: examples/kubernetes/adapter-task-resource-job-rolebinding.yaml
-    deployment.yaml: examples/kubernetes/adapter-task-resource-deployment.yaml
+    job.yaml: examples/kubernetes/job.yaml
 
 broker:
   create: true
+  type: googlepubsub
   googlepubsub:
     projectId: CHANGE_ME
     subscriptionId: CHANGE_ME
@@ -29,26 +26,7 @@ image:
   pullPolicy: Always
   tag: latest
 
-env:
-  - name: NAMESPACE
-    valueFrom:
-      fieldRef:
-        fieldPath: metadata.namespace
-  - name: SERVICE_ACCOUNT
-    valueFrom:
-      fieldRef:
-        fieldPath: spec.serviceAccountName
-  - name: SIMULATE_RESULT
-    value: success     # other possible values: success, failure, hang, crash, invalid-json, missing-status
-
 rbac:
-   resources:
-     - namespaces
-     - serviceaccounts
-     - configmaps
-     - deployments
-     - roles
-     - rolebindings
-     - jobs
-     - jobs/status
-     - pods
+  resources:
+    - namespaces
+    - jobs

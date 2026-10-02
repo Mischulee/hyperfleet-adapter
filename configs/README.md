@@ -1,4 +1,20 @@
-# Broker Configuration
+# Configuration templates
+
+## Adapter v2 skeleton
+
+[`adapter-config-template.yaml`](./adapter-config-template.yaml) and
+[`adapter-task-config-template.yaml`](./adapter-task-config-template.yaml) form
+a matching local Kubernetes example. The task uses the quoted
+`schema_version: "2.0"`; a resource without `transport` uses the local client.
+For named remote transports, see the [remote examples](../charts/examples/README.md).
+Task config is YAML only; deployment config supports environment and flag
+overrides.
+
+<!-- TODO(HYPERFLEET-1448): this skeleton covers one local task only. Link the
+v2 field reference here once docs/configuration.md and the authoring guide
+describe named transports, preconditions, captures and by_selectors. -->
+
+## Broker configuration
 
 This directory contains ConfigMap templates and examples for configuring the hyperfleet-adapter broker consumer.
 
@@ -28,11 +44,10 @@ data:
 Also set the adapter broker settings in the deployment config:
 
 ```yaml
-spec:
-  clients:
-    broker:
-      subscriptionId: "your-subscription-name"
-      topic: "your-topic-name"
+clients:
+  broker:
+    subscription_id: "your-subscription-name"
+    topic: "your-topic-name"
 ```
 
 ### 3. Apply the ConfigMap
@@ -213,4 +228,3 @@ pubsub.subscriptions.get
 - [Internal broker_consumer Package](../internal/broker_consumer/README.md)
 - [Integration Tests](../test/integration/broker_consumer/README.md)
 - [CloudEvents Specification](https://github.com/cloudevents/spec)
-

@@ -1,3 +1,5 @@
+schema_version: "2.0"
+
 params:
   - name: "clusterId"
     source: "event.id"
@@ -13,6 +15,7 @@ params:
 
   - name: generation
     source: checkClusterState.generation
+    type: int
 
   - name: clusterName
     source: checkClusterState.name
@@ -23,8 +26,6 @@ params:
 
 resources:
   - name: namespace
-    transport:
-      client: "kubernetes"
     manifest:
       apiVersion: v1
       kind: Namespace
@@ -46,10 +47,8 @@ resources:
         when:
           expression: "is_deleting"
   - name: "helloWorldJob"
-    transport:
-      client: "kubernetes"
     manifest:
-      ref: "/etc/adapter/job.yaml"
+      ref: "job.yaml"
     discovery:
       namespace: '{{ .clusterId }}-k8s'
       by_selectors:
@@ -65,8 +64,6 @@ resources:
 post:
   payloads:
     - name: "clusterStatusPayload"
-      when:
-        expression: "!adapter.resourcesSkipped"
       build:
         adapter: "{{ .adapter.name }}"
         conditions:
@@ -144,63 +141,36 @@ post:
                 is_deleting
                   && adapter.?executionStatus.orValue("") == "success"
                   && !adapter.?resourcesSkipped.orValue(false)
-                  && !resources.?namespace.hasValue()
+                  && resource_states.?namespace.orValue("") == "confirmed_deleted"
+                  && resource_states.?helloWorldJob.orValue("") == "confirmed_deleted"
                 ? "True"
                 : "False"
             reason:
               expression: |
                 !is_deleting
                 ? ""
-                : !resources.?namespace.hasValue()
-                  ? "CleanupConfirmed"
-                  : "CleanupInProgress"
+                : adapter.?executionStatus.orValue("") != "success"
+                  ? "AdapterUnhealthy"
+                  : resource_states.?namespace.orValue("") == "confirmed_deleted"
+                      && resource_states.?helloWorldJob.orValue("") == "confirmed_deleted"
+                    ? "CleanupConfirmed"
+                    : "CleanupInProgress"
             message:
               expression: |
                 !is_deleting
                 ? ""
-                : !resources.?namespace.hasValue()
-                  ? "All resources deleted; cleanup confirmed"
-                  : "Deletion in progress; waiting for namespace to be removed"
-        observed_generation:
-          expression: "generation"
-        observed_time: "{{ now | date \"2006-01-02T15:04:05Z07:00\" }}"
-
-    # Skipped path: preconditions not met — report simplified status without
-    # evaluating resources.* (which may not exist in this context)
-    - name: "skippedStatusPayload"
-      when:
-        expression: "adapter.resourcesSkipped"
-      build:
-        adapter: "{{ .adapter.name }}"
-        conditions:
-          - type: "Applied"
-            status: "False"
-            reason: "PreconditionsNotMet"
-            message:
-              expression: |
-                "Resources skipped: " + adapter.?skipReason.orValue("preconditions not met")
-          - type: "Available"
-            status: "False"
-            reason: "PreconditionsNotMet"
-            message:
-              expression: |
-                "Resources not available: " + adapter.?skipReason.orValue("preconditions not met")
-          - type: "Health"
-            status: "True"
-            reason: "NoErrors"
-            message: "Adapter is healthy, no work performed due to preconditions"
-          - type: "Finalized"
-            status: "False"
-            reason: ""
-            message: ""
+                : adapter.?executionStatus.orValue("") != "success"
+                  ? "Cannot confirm cleanup while the adapter is unhealthy"
+                  : resource_states.?namespace.orValue("") == "confirmed_deleted"
+                      && resource_states.?helloWorldJob.orValue("") == "confirmed_deleted"
+                    ? "All resources deleted; cleanup confirmed"
+                    : "Deletion in progress; waiting for Job and Namespace confirmation"
         observed_generation:
           expression: "generation"
         observed_time: "{{ now | date \"2006-01-02T15:04:05Z07:00\" }}"
 
   post_actions:
     - name: "reportClusterStatus"
-      when:
-        expression: "!adapter.resourcesSkipped"
       api_call:
         method: "PUT"
         url: "/clusters/{{ .clusterId }}/statuses"
@@ -208,14 +178,3 @@ post:
           - name: "Content-Type"
             value: "application/json"
         body: "{{ .clusterStatusPayload }}"
-
-    - name: "reportClusterStatusSkipped"
-      when:
-        expression: "adapter.resourcesSkipped"
-      api_call:
-        method: "PUT"
-        url: "/clusters/{{ .clusterId }}/statuses"
-        headers:
-          - name: "Content-Type"
-            value: "application/json"
-        body: "{{ .skippedStatusPayload }}"

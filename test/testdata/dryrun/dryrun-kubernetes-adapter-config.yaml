@@ -1,7 +1,7 @@
 # Adapter deployment configuration for dry-run testing
 adapter:
   name: dryrun-adapter
-  version: "0.1.0"
+  version: "0.3.0"
 
 clients:
   hyperfleet_api:

@@ -8,11 +8,14 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/desireclient"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/manifest"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/transportclient"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/constants"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -337,9 +340,109 @@ func TestDiscoverResources_EmptyStore(t *testing.T) {
 	assert.Empty(t, list.Items)
 }
 
-// maestroTarget is a non-nil transport context value that represents a Maestro call.
-// The concrete type doesn't matter here — only nil vs non-nil is tested.
-var maestroTarget transportclient.TransportContext = struct{ ConsumerName string }{"cluster-1"}
+// remoteRoute is the transport context a remote route passes; the local
+// Kubernetes route passes nil.
+var remoteRoute = &desireclient.TransportContext{ManagementCluster: "cluster-x", Resource: "configmaps"}
+
+// makeRemoteManifest is makeManifest plus the generation annotation the remote
+// client requires.
+func makeRemoteManifest(apiVersion, kind, namespace, name string) []byte {
+	obj := &unstructured.Unstructured{}
+	_ = json.Unmarshal(makeManifest(apiVersion, kind, namespace, name), &obj.Object)
+	obj.SetAnnotations(map[string]string{constants.AnnotationGeneration: "1"})
+	data, _ := json.Marshal(obj.Object)
+	return data
+}
+
+// TestApplyResource_Remote_RequiresGeneration verifies that a remote route rejects
+// a manifest without the generation annotation, as the real remote client does,
+// even when a discovery override would replace the stored object.
+func TestApplyResource_Remote_RequiresGeneration(t *testing.T) {
+	ctx := context.Background()
+	overrides := DiscoveryOverrides{
+		"my-cm": {
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]interface{}{
+				"name":        "my-cm",
+				"namespace":   "default",
+				"annotations": map[string]interface{}{constants.AnnotationGeneration: "1"},
+			},
+		},
+	}
+	client := NewDryrunTransportClientWithOverrides(overrides)
+
+	_, err := client.ApplyResource(ctx, makeManifest("v1", "ConfigMap", "default", "my-cm"), nil, remoteRoute)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), constants.AnnotationGeneration)
+	require.Len(t, client.Records, 1)
+	assert.Equal(t, err, client.Records[0].Error)
+
+	_, err = client.ApplyResource(ctx, makeRemoteManifest("v1", "ConfigMap", "default", "my-cm"), nil, remoteRoute)
+	require.NoError(t, err)
+
+	// The local client does not require the annotation.
+	_, err = client.ApplyResource(ctx, makeManifest("v1", "ConfigMap", "default", "local-cm"), nil, nil)
+	require.NoError(t, err)
+}
+
+// TestApplyResource_ParseFailureRecordsRoute verifies that a manifest that fails
+// to parse still records its resource and route, like every other record.
+func TestApplyResource_ParseFailureRecordsRoute(t *testing.T) {
+	ctx := transportclient.WithResourceName(context.Background(), "config")
+	client := NewDryrunTransportClient()
+
+	_, err := client.ApplyResource(ctx, []byte("{invalid-json"), nil, remoteRoute)
+	require.Error(t, err)
+	require.Len(t, client.Records, 1)
+	r := client.Records[0]
+	assert.Equal(t, operationApply, r.Operation)
+	assert.Equal(t, "config", r.Resource)
+	assert.Equal(t, "cluster-x", r.TargetCluster)
+	assert.Equal(t, "configmaps", r.TargetResource)
+	assert.Equal(t, err, r.Error)
+}
+
+// TestDeleteResource_RouteSemantics verifies that delete and apply agree on what
+// a remote route is: a typed-nil remote context is the local route.
+func TestDeleteResource_RouteSemantics(t *testing.T) {
+	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	var typedNil *desireclient.TransportContext
+
+	tests := []struct {
+		target    transportclient.TransportContext
+		name      string
+		wantRoute string
+		wantKept  bool
+	}{
+		{name: "desire route", target: remoteRoute, wantKept: true, wantRoute: "cluster-x"},
+		{name: "typed-nil desire route", target: typedNil},
+		{name: "local route", target: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			client := NewDryrunTransportClient()
+			_, err := client.ApplyResource(ctx, makeManifest("v1", "ConfigMap", "default", "my-cm"), nil, nil)
+			require.NoError(t, err)
+
+			require.NoError(t, client.DeleteResource(ctx, gvk, "default", "my-cm", nil, tt.target))
+			last := client.Records[len(client.Records)-1]
+			assert.Equal(t, operationDelete, last.Operation)
+			assert.Equal(t, tt.wantRoute, last.TargetCluster)
+
+			disc := &testDiscovery{namespace: "default", name: "my-cm", singleResource: true}
+			list, err := client.DiscoverResources(ctx, gvk, disc, nil)
+			require.NoError(t, err)
+			if tt.wantKept {
+				require.Len(t, list.Items, 1)
+				assert.NotNil(t, list.Items[0].GetDeletionTimestamp())
+			} else {
+				assert.Empty(t, list.Items)
+			}
+		})
+	}
+}
 
 func TestDeleteResource_Kubernetes_RemovesFromStore(t *testing.T) {
 	ctx := context.Background()
@@ -369,7 +472,7 @@ func TestDeleteResource_Kubernetes_RemovesFromStore(t *testing.T) {
 	assert.True(t, deleteFound)
 }
 
-func TestDeleteResource_Maestro_SetsDeleteTimestampAndKeepsInStore(t *testing.T) {
+func TestDeleteResource_Remote_SetsDeleteTimestampAndKeepsInStore(t *testing.T) {
 	ctx := context.Background()
 	client := NewDryrunTransportClient()
 	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
@@ -377,17 +480,17 @@ func TestDeleteResource_Maestro_SetsDeleteTimestampAndKeepsInStore(t *testing.T)
 	_, err := client.ApplyResource(ctx, makeManifest("v1", "ConfigMap", "default", "my-cm"), nil, nil)
 	require.NoError(t, err)
 
-	// Maestro delete: non-nil target → async, resource must stay with deletionTimestamp.
-	err = client.DeleteResource(ctx, gvk, "default", "my-cm", nil, maestroTarget)
+	// Remote delete: non-nil target → async, resource must stay with deletionTimestamp.
+	err = client.DeleteResource(ctx, gvk, "default", "my-cm", nil, remoteRoute)
 	require.NoError(t, err)
 
 	disc := &testDiscovery{namespace: "default", name: "my-cm", singleResource: true}
 	list, err := client.DiscoverResources(ctx, gvk, disc, nil)
 	require.NoError(t, err)
-	require.Len(t, list.Items, 1, "Maestro resource must remain in store after delete (async cleanup)")
+	require.Len(t, list.Items, 1, "remote resource must remain in store after delete (async cleanup)")
 
 	ts := list.Items[0].GetDeletionTimestamp()
-	assert.NotNil(t, ts, "deletionTimestamp must be set for Maestro async delete")
+	assert.NotNil(t, ts, "deletionTimestamp must be set for remote async delete")
 	assert.False(t, ts.IsZero())
 }
 
@@ -404,7 +507,7 @@ func TestDeleteResource_NonExistentResource_ReturnsNotFound(t *testing.T) {
 	assert.Empty(t, client.Records)
 }
 
-func TestDeleteResource_WithOverrides_Maestro_SetsDeleteTimestamp(t *testing.T) {
+func TestDeleteResource_WithOverrides_Remote_SetsDeleteTimestamp(t *testing.T) {
 	ctx := context.Background()
 	overrides := DiscoveryOverrides{
 		"my-cm": {
@@ -419,8 +522,8 @@ func TestDeleteResource_WithOverrides_Maestro_SetsDeleteTimestamp(t *testing.T) 
 	client := NewDryrunTransportClientWithOverrides(overrides)
 	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
 
-	// Maestro delete on a pre-loaded override resource.
-	err := client.DeleteResource(ctx, gvk, "default", "my-cm", nil, maestroTarget)
+	// Remote delete on a pre-loaded override resource.
+	err := client.DeleteResource(ctx, gvk, "default", "my-cm", nil, remoteRoute)
 	require.NoError(t, err)
 
 	disc := &testDiscovery{namespace: "default", name: "my-cm", singleResource: true}
@@ -428,6 +531,40 @@ func TestDeleteResource_WithOverrides_Maestro_SetsDeleteTimestamp(t *testing.T) 
 	require.NoError(t, err)
 	require.Len(t, list.Items, 1)
 	assert.NotNil(t, list.Items[0].GetDeletionTimestamp())
+}
+
+// TestRecords_RemoteRouteRecorded verifies that every operation through a remote
+// route records its target cluster and resource plural, and the local route
+// records neither.
+func TestRecords_RemoteRouteRecorded(t *testing.T) {
+	ctx := transportclient.WithResourceName(context.Background(), "config")
+	client := NewDryrunTransportClient()
+	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// apply, get, discover, delete all through the remote route.
+	_, err := client.ApplyResource(ctx, makeRemoteManifest("v1", "ConfigMap", "default", "my-cm"), nil, remoteRoute)
+	require.NoError(t, err)
+	_, err = client.GetResource(ctx, gvk, "default", "my-cm", remoteRoute)
+	require.NoError(t, err)
+	_, err = client.DiscoverResources(ctx, gvk, &testDiscovery{namespace: "default"}, remoteRoute)
+	require.NoError(t, err)
+	err = client.DeleteResource(ctx, gvk, "default", "my-cm", nil, remoteRoute)
+	require.NoError(t, err)
+
+	require.Len(t, client.Records, 4)
+	for _, r := range client.Records {
+		assert.Equal(t, "config", r.Resource, "op %q must record the task config resource", r.Operation)
+		assert.Equal(t, "cluster-x", r.TargetCluster, "op %q must record the remote target cluster", r.Operation)
+		assert.Equal(t, "configmaps", r.TargetResource, "op %q must record the remote target resource", r.Operation)
+	}
+
+	// The local route (nil target) records no routing identity.
+	local := NewDryrunTransportClient()
+	_, err = local.ApplyResource(ctx, makeManifest("v1", "ConfigMap", "default", "local-cm"), nil, nil)
+	require.NoError(t, err)
+	require.Len(t, local.Records, 1)
+	assert.Empty(t, local.Records[0].TargetCluster)
+	assert.Empty(t, local.Records[0].TargetResource)
 }
 
 func TestConcurrentApplyAndGet(t *testing.T) {

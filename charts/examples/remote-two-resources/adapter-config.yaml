@@ -1,0 +1,32 @@
+adapter:
+  name: remote-two-resources-example
+  version: "0.3.0"
+log:
+  level: info
+clients:
+  hyperfleet_api:
+    base_url: http://hyperfleet-api:8000
+    version: v1
+    timeout: 2s
+    retry_attempts: 3
+    retry_backoff: exponential
+  broker:
+    subscription_id: CHANGE_ME
+    topic: CHANGE_ME
+  kubernetes:
+    api_version: v1
+
+# A separately provisioned shared Redis store and remote applier are required.
+# The chart overrides this placeholder URL from the Redis Secret at startup.
+stores:
+  remote-store:
+    type: redis
+    url: rediss://CHANGE_ME:6379
+transports:
+  remote-primary:
+    type: remote
+    store: remote-store
+    target_cluster: "{{ .clusterId }}"
+    resource_plurals:
+      "v1/Namespace": namespaces
+      "v1/ConfigMap": configmaps

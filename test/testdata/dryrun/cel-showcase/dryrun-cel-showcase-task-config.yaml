@@ -1,3 +1,5 @@
+schema_version: "2.0"
+
 # CEL Expression Showcase — Task Configuration for Dry-Run Testing
 #
 # This file demonstrates ALL available CEL expression patterns supported by the
@@ -205,8 +207,6 @@ preconditions:
 resources:
   # Resource 0: Namespace
   - name: "namespace0"
-    transport:
-      client: kubernetes
     manifest:
       apiVersion: v1
       kind: Namespace
@@ -225,8 +225,6 @@ resources:
 
   # Resource 1: ConfigMap — cluster configuration
   - name: "configmap0"
-    transport:
-      client: kubernetes
     manifest:
       apiVersion: v1
       kind: ConfigMap
@@ -246,8 +244,6 @@ resources:
 
   # Resource 2: ConfigMap — extra configuration (for additional expression targets)
   - name: "configmap1"
-    transport:
-      client: kubernetes
     manifest:
       apiVersion: v1
       kind: ConfigMap

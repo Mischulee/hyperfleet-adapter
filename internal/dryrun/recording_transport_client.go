@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/desireclient"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/manifest"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/transportclient"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -30,7 +31,45 @@ type TransportRecord struct {
 	Name      string
 	GVK       schema.GroupVersionKind
 	Operation string // operationApply, operationGet, operationDiscover
-	Manifest  []byte
+	// Resource is the task config resource name the call was made for, from
+	// transportclient.WithResourceName. It stays unique when two resources
+	// render the same object, on the same route or on different ones.
+	Resource string
+	// TargetCluster and TargetResource are the remote route's resolved cluster and
+	// resource plural, empty for the local Kubernetes route. They make the route
+	// the executor selected observable in a dry-run trace.
+	TargetCluster  string
+	TargetResource string
+	Manifest       []byte
+}
+
+// routeTarget reports whether target is a remote route, and the cluster and
+// resource plural it routes to. A remote route passes a non-nil
+// *desireclient.TransportContext; the local Kubernetes route passes nil.
+// TODO(HYPERFLEET-1504): Maestro contexts are treated as local in dry runs,
+// omitting the consumer from traces and simulating deletion synchronously.
+func routeTarget(target transportclient.TransportContext) (cluster, resource string, remote bool) {
+	if tc, ok := target.(*desireclient.TransportContext); ok && tc != nil {
+		return tc.ManagementCluster, tc.Resource, true
+	}
+	return "", "", false
+}
+
+// newRecord builds a TransportRecord for the resource named in ctx, copying the
+// routing identity from a remote route's target.
+func newRecord(
+	ctx context.Context,
+	operation string,
+	gvk schema.GroupVersionKind,
+	namespace, name string,
+	target transportclient.TransportContext,
+) TransportRecord {
+	record := TransportRecord{
+		Operation: operation, GVK: gvk, Namespace: namespace, Name: name,
+		Resource: transportclient.ResourceNameFromContext(ctx),
+	}
+	record.TargetCluster, record.TargetResource, _ = routeTarget(target)
+	return record
 }
 
 // DryrunTransportClient implements transportclient.TransportClient by recording
@@ -89,11 +128,9 @@ func (c *DryrunTransportClient) ApplyResource(
 	// Parse manifest
 	obj := &unstructured.Unstructured{}
 	if err := json.Unmarshal(manifestBytes, &obj.Object); err != nil {
-		record := TransportRecord{
-			Operation: operationApply,
-			Manifest:  manifestBytes,
-			Error:     fmt.Errorf("failed to parse manifest: %w", err),
-		}
+		record := newRecord(ctx, operationApply, schema.GroupVersionKind{}, "", "", target)
+		record.Manifest = manifestBytes
+		record.Error = fmt.Errorf("failed to parse manifest: %w", err)
 		c.Records = append(c.Records, record)
 		return nil, record.Error
 	}
@@ -102,6 +139,19 @@ func (c *DryrunTransportClient) ApplyResource(
 	namespace := obj.GetNamespace()
 	name := obj.GetName()
 	key := resourceKey(gvk, namespace, name)
+
+	// The remote client rejects a manifest without a valid generation annotation.
+	// Check the rendered manifest before a discovery override replaces it, so the
+	// dry run fails where the real client would.
+	if _, _, remote := routeTarget(target); remote {
+		if err := manifest.ValidateGenerationFromUnstructured(obj); err != nil {
+			record := newRecord(ctx, operationApply, gvk, namespace, name, target)
+			record.Manifest = manifestBytes
+			record.Error = fmt.Errorf("invalid manifest generation: %w", err)
+			c.Records = append(c.Records, record)
+			return nil, record.Error
+		}
+	}
 
 	// Determine operation: create or update
 	var operation manifest.Operation
@@ -132,14 +182,10 @@ func (c *DryrunTransportClient) ApplyResource(
 		Reason:    fmt.Sprintf("dry-run %s", operation),
 	}
 
-	c.Records = append(c.Records, TransportRecord{
-		Operation: operationApply,
-		GVK:       gvk,
-		Namespace: namespace,
-		Name:      name,
-		Manifest:  manifestBytes,
-		Result:    result,
-	})
+	record := newRecord(ctx, operationApply, gvk, namespace, name, target)
+	record.Manifest = manifestBytes
+	record.Result = result
+	c.Records = append(c.Records, record)
 
 	return result, nil
 }
@@ -157,12 +203,7 @@ func (c *DryrunTransportClient) GetResource(
 	key := resourceKey(gvk, namespace, name)
 	obj, exists := c.resources[key]
 
-	c.Records = append(c.Records, TransportRecord{
-		Operation: operationGet,
-		GVK:       gvk,
-		Namespace: namespace,
-		Name:      name,
-	})
+	c.Records = append(c.Records, newRecord(ctx, operationGet, gvk, namespace, name, target))
 
 	if !exists {
 		return nil, apierrors.NewNotFound(
@@ -175,14 +216,14 @@ func (c *DryrunTransportClient) GetResource(
 // DeleteResource simulates deletion and records the operation.
 //
 // The behavior is transport-aware via the target context:
-//   - K8s transport passes nil: deletion is synchronous, so the resource is removed
-//     from the store immediately. The post-delete rediscovery returns NotFound, allowing
-//     dependent resources to cascade-delete within the same reconciliation.
-//   - Maestro transport passes a non-nil *maestroclient.TransportContext: deletion is
-//     asynchronous — Maestro cleans up sub-resources before removing the ManifestWork.
-//     The resource is kept in the store with deletionTimestamp set so the post-delete
-//     rediscovery returns it as "still present", and dependents wait for the next
-//     reconciliation, exactly as they would against a real Maestro cluster.
+//   - Local Kubernetes route passes nil: deletion is synchronous, so the resource is
+//     removed from the store immediately. The post-delete rediscovery returns NotFound,
+//     allowing dependent resources to cascade-delete within the same reconciliation.
+//   - Remote route passes a non-nil *desireclient.TransportContext: deletion is
+//     asynchronous — the target cluster reconciles the removal out of band. The resource
+//     is kept in the store with deletionTimestamp set so the post-delete rediscovery
+//     returns it as "still present", and dependents wait for the next reconciliation,
+//     exactly as they would against a real remote cluster.
 func (c *DryrunTransportClient) DeleteResource(
 	ctx context.Context,
 	gvk schema.GroupVersionKind,
@@ -195,14 +236,14 @@ func (c *DryrunTransportClient) DeleteResource(
 
 	key := resourceKey(gvk, namespace, name)
 	_, exists := c.resources[key]
-	if target != nil {
-		// Maestro transport: async deletion — mark with deletionTimestamp, keep in store.
+	if _, _, remote := routeTarget(target); remote {
+		// Remote route: async deletion — mark with deletionTimestamp, keep in store.
 		if exists {
 			now := metav1.NewTime(time.Now())
 			c.resources[key].SetDeletionTimestamp(&now)
 		}
 	} else {
-		// K8s transport: synchronous deletion — remove from store immediately.
+		// Local Kubernetes route: synchronous deletion — remove from store immediately.
 		// Return NotFound when absent, matching real API behavior.
 		if !exists {
 			return apierrors.NewNotFound(schema.GroupResource{Group: gvk.Group, Resource: gvk.Kind}, name)
@@ -210,12 +251,7 @@ func (c *DryrunTransportClient) DeleteResource(
 		delete(c.resources, key)
 	}
 
-	c.Records = append(c.Records, TransportRecord{
-		Operation: operationDelete,
-		GVK:       gvk,
-		Namespace: namespace,
-		Name:      name,
-	})
+	c.Records = append(c.Records, newRecord(ctx, operationDelete, gvk, namespace, name, target))
 
 	return nil
 }
@@ -230,12 +266,8 @@ func (c *DryrunTransportClient) DiscoverResources(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.Records = append(c.Records, TransportRecord{
-		Operation: operationDiscover,
-		GVK:       gvk,
-		Namespace: discovery.GetNamespace(),
-		Name:      discovery.GetName(),
-	})
+	c.Records = append(c.Records,
+		newRecord(ctx, operationDiscover, gvk, discovery.GetNamespace(), discovery.GetName(), target))
 
 	list := &unstructured.UnstructuredList{}
 
