@@ -452,11 +452,14 @@ func runServe(flags *pflag.FlagSet) error {
 		}
 	}()
 
+	adapterName := metrics.ExtractAdapterName(config.Adapter.Name)
+
 	// Start metrics server
 	metricsServer := health.NewMetricsServer(MetricsServerPort, health.MetricsConfig{
-		Component: config.Adapter.Name,
-		Version:   version.Version,
-		Commit:    version.Commit,
+		Component:   config.Adapter.Name,
+		Version:     version.Version,
+		Commit:      version.Commit,
+		AdapterName: adapterName,
 	})
 	err = metricsServer.Start(ctx)
 	if err != nil {
@@ -472,7 +475,6 @@ func runServe(flags *pflag.FlagSet) error {
 	}()
 
 	// Create adapter metrics recorder
-	adapterName := metrics.ExtractAdapterName(config.Adapter.Name)
 	metricsRecorder := metrics.NewRecorder(config.Adapter.Name, version.Version, adapterName, nil)
 
 	// Create real clients
