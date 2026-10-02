@@ -349,6 +349,14 @@ func buildExecutor(
 		Build()
 }
 
+func adapterNameForMetrics(component string) (string, error) {
+	adapterName := metrics.ExtractAdapterName(component)
+	if strings.TrimSpace(adapterName) == "" {
+		return "", fmt.Errorf("adapter name %q produces an empty metrics identity", component)
+	}
+	return adapterName, nil
+}
+
 // -----------------------------------------------------------------------------
 // Serve mode (normal operation)
 // -----------------------------------------------------------------------------
@@ -369,6 +377,10 @@ func runServe(flags *pflag.FlagSet) error {
 
 	// Load unified configuration (deployment + task configs)
 	config, err := loadConfig(ctx, flags)
+	if err != nil {
+		return err
+	}
+	adapterName, err := adapterNameForMetrics(config.Adapter.Name)
 	if err != nil {
 		return err
 	}
@@ -451,8 +463,6 @@ func runServe(flags *pflag.FlagSet) error {
 			slog.WarnContext(shutdownCtx, "failed to shutdown health server", "error", shutdownErr)
 		}
 	}()
-
-	adapterName := metrics.ExtractAdapterName(config.Adapter.Name)
 
 	// Start metrics server
 	metricsServer := health.NewMetricsServer(MetricsServerPort, health.MetricsConfig{
