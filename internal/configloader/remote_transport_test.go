@@ -236,7 +236,7 @@ resources:
 		{
 			name: "legacy block", adapter: remoteAdapterYAML,
 			task: replaceTask("transport: Remote-Primary", "transport: {client: remote-primary}"),
-			want: `the object form is not supported with schema_version "2.0"`,
+			want: `resources[0].transport: this is a v1 configuration shape`,
 		},
 		{
 			name: "colliding GVK keys",
@@ -308,7 +308,8 @@ func TestValidateConfigRoutingRejectsRemoteDeleteWithoutByName(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := ValidateConfigRouting(&Config{
-				Stores: map[string]StoreDefinition{"desired-memory": {Type: StoreTypeMemory}},
+				SchemaVersion: schemaVersionV2,
+				Stores:        map[string]StoreDefinition{"desired-memory": {Type: StoreTypeMemory}},
 				Transports: map[string]TransportDefinition{"remote-primary": {
 					Type: TransportTypeRemote, Store: "desired-memory", TargetCluster: "cluster-1",
 					ResourcePlurals: map[string]string{"v1/ConfigMap": "configmaps"},

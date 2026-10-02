@@ -74,7 +74,7 @@ func TestLoadLegacyTransportForm(t *testing.T) {
 	}{
 		"rejected with schema_version 2.0": {
 			legacyMaestroAdapterYAML, legacyTask("2.0", legacyMaestroTransport),
-			`resources[0].transport: the object form is not supported with schema_version "2.0"`,
+			`resources[0].transport: this is a v1 configuration shape`,
 		},
 		"maestro needs clients.maestro": {
 			legacyAdapterYAML, legacyTask("", legacyMaestroTransport),

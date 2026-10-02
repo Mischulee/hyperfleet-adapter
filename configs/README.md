@@ -9,10 +9,12 @@ a matching local Kubernetes example. The task uses the quoted
 For named remote transports, see the [remote examples](../charts/examples/README.md).
 Task config is YAML only; deployment config supports environment and flag
 overrides.
+See the [configuration reference](../docs/configuration.md#task-schema-version)
+for `schema_version` and named transport settings.
 
 <!-- TODO(HYPERFLEET-1448): this skeleton covers one local task only. Link the
-v2 field reference here once docs/configuration.md and the authoring guide
-describe named transports, preconditions, captures and by_selectors. -->
+updated v2 authoring guide when it describes named transports, preconditions,
+captures, and by_selectors. -->
 
 ## Broker configuration
 

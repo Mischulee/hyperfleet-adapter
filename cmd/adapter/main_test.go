@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,6 +22,20 @@ func TestDryRunLogOptionsDefaults(t *testing.T) {
 
 	require.Equal(t, "warn", level)
 	require.Equal(t, "text", format)
+}
+
+func TestLoadConfigRejectsTaskSchemaBeforeRuntimeSetup(t *testing.T) {
+	dir := t.TempDir()
+	adapterFile := filepath.Join(dir, "adapter.yaml")
+	taskFile := filepath.Join(dir, "task.yaml")
+	require.NoError(t, os.WriteFile(adapterFile, []byte("adapter: {name: test}\n"), 0o600))
+	require.NoError(t, os.WriteFile(taskFile, []byte("schema_version: 2.0\n"), 0o600))
+	previousConfig, previousTask := configPath, taskConfigPath
+	configPath, taskConfigPath = adapterFile, taskFile
+	t.Cleanup(func() { configPath, taskConfigPath = previousConfig, previousTask })
+
+	_, err := loadConfig(t.Context(), nil)
+	require.ErrorContains(t, err, "schema_version must be a string")
 }
 
 func TestDryRunLogOptionsHonorsLevelOverride(t *testing.T) {
@@ -57,7 +73,8 @@ func TestLogOptionsBootstrapDefaults(t *testing.T) {
 
 func TestBuildExecutor_DryRunNamedRemoteTransport(t *testing.T) {
 	config := &configloader.Config{
-		Adapter: configloader.AdapterInfo{Name: "test-adapter"},
+		SchemaVersion: "2.0",
+		Adapter:       configloader.AdapterInfo{Name: "test-adapter"},
 		Stores: map[string]configloader.StoreDefinition{
 			"desired-memory": {Type: configloader.StoreTypeMemory},
 		},
@@ -155,7 +172,8 @@ func TestDryRun_RecordsResourceNames(t *testing.T) {
 		When: &configloader.LifecycleWhen{Expression: "event.?deleting.orValue(false)"},
 	}}
 	config := &configloader.Config{
-		Adapter: configloader.AdapterInfo{Name: "test-adapter"},
+		SchemaVersion: "2.0",
+		Adapter:       configloader.AdapterInfo{Name: "test-adapter"},
 		Stores: map[string]configloader.StoreDefinition{
 			"desired-memory": {Type: configloader.StoreTypeMemory},
 		},
@@ -228,7 +246,8 @@ func TestDryRun_TraceShowsEachResourcesOwnManifest(t *testing.T) {
 		return resource
 	}
 	config := &configloader.Config{
-		Adapter: configloader.AdapterInfo{Name: "test-adapter"},
+		SchemaVersion: "2.0",
+		Adapter:       configloader.AdapterInfo{Name: "test-adapter"},
 		Stores: map[string]configloader.StoreDefinition{
 			"desired-memory": {Type: configloader.StoreTypeMemory},
 		},

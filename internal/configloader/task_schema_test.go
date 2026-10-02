@@ -1,0 +1,155 @@
+package configloader
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestTaskSchemaYAML(t *testing.T) {
+	base := `resources:
+  - name: item
+    manifest: {apiVersion: v1, kind: ConfigMap}
+    discovery: {by_name: item}
+`
+	v2Base := "schema_version: \"2.0\"\n" + base
+	withField := func(input, field string) string {
+		return strings.Replace(input, "    manifest:", "    "+field+"\n    manifest:", 1)
+	}
+	for _, tc := range []struct{ name, yaml, want string }{
+		{"numeric", "schema_version: 2.0\n" + base, "schema_version must be a string"},
+		{"null", "schema_version: null\n" + base, "schema_version must be a string"},
+		{"empty", "schema_version: \"\"\n" + base, "schema_version must be \"2.0\""},
+		{"boolean", "schema_version: true\n" + base, "schema_version must be a string"},
+		{"sequence", "schema_version: [2.0]\n" + base, "schema_version must be a string"},
+		{"mapping", "schema_version: {major: 2}\n" + base, "schema_version must be a string"},
+		{"unsupported", "schema_version: \"2.1\"\n" + base, "schema_version \"2.1\" is unsupported"},
+		{"v1 unsupported", "schema_version: \"1.0\"\n" + base, "schema_version \"1.0\" is unsupported"},
+		{"patch unsupported", "schema_version: \"2.0.0\"\n" + base,
+			"schema_version \"2.0.0\" is unsupported"},
+		{
+			"named unversioned", withField(base, "transport: remote"),
+			"resources[0].transport: schema_version is required for named transport references",
+		},
+		{
+			"second named unversioned", base + `  - name: second
+    transport: remote
+    manifest: {apiVersion: v1, kind: ConfigMap}
+    discovery: {by_name: second}
+`, "resources[1].transport: schema_version is required for named transport references",
+		},
+		{
+			"aliased named unversioned", `route: &route remote
+resources:
+  - name: item
+    transport: *route
+    manifest: {apiVersion: v1, kind: ConfigMap}
+    discovery: {by_name: item}
+`, "resources[0].transport: schema_version is required for named transport references",
+		},
+		{
+			"object v2", withField(v2Base, "transport: {client: kubernetes, removed: true}"),
+			"resources[0].transport: this is a v1 configuration shape",
+		},
+		{
+			"nested v2", withField(v2Base, "nested_discoveries: null"),
+			"resources[0].nested_discoveries: this is a v1 configuration shape",
+		},
+		{"unknown", "schema_version: \"2.0\"\nunknown: true\n" + base, "field unknown not found"},
+		{"unknown resource", withField(v2Base, "removed: true"), "field removed not found"},
+		{"duplicate", "schema_version: \"2.0\"\n" + v2Base, "already defined"},
+		{
+			"merged named unversioned", `routing: &routing {transport: remote}
+resources:
+  - <<: *routing
+    name: item
+    manifest: {apiVersion: v1, kind: ConfigMap}
+    discovery: {by_name: item}
+`, "resources[0].transport: schema_version is required for named transport references",
+		},
+		{
+			"aliased v2 object", `schema_version: "2.0"
+routing: &routing {client: kubernetes}
+resources:
+  - name: item
+    transport: *routing
+    manifest: {apiVersion: v1, kind: ConfigMap}
+    discovery: {by_name: item}
+`, "resources[0].transport: this is a v1 configuration shape",
+		},
+		{
+			"merged null", `schema_version: "2.0"
+routing: &routing {transport: null}
+resources:
+  - <<: *routing
+    name: item
+    manifest: {apiVersion: v1, kind: ConfigMap}
+    discovery: {by_name: item}
+`, "resources[0].transport must name a transport",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadRemoteConfig(t, "adapter: {name: test}\n", tc.yaml)
+			require.ErrorContains(t, err, tc.want)
+			if strings.Contains(tc.want, "this is a v1 configuration shape") {
+				require.ErrorContains(t, err, v2ConceptsURL)
+			}
+		})
+	}
+}
+
+func TestTaskSchemaAcceptsExplicitYAMLString(t *testing.T) {
+	_, err := loadRemoteConfig(t, "adapter: {name: test}\n", "schema_version: !!str 2.0\n")
+	require.NoError(t, err)
+
+	// The schema check resolves the alias and accepts it; only strict decoding
+	// then rejects the extra top-level anchor key.
+	_, err = loadRemoteConfig(t, "adapter: {name: test}\n", "version: &version \"2.0\"\nschema_version: *version\n")
+	require.ErrorContains(t, err, "field version not found")
+}
+
+func TestTaskSchemaIgnoresManifestKeys(t *testing.T) {
+	task := `schema_version: "2.0"
+resources:
+  - name: item
+    manifest:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: item
+      data:
+        nested_discoveries: value
+        transport: value
+    discovery: {by_name: item}
+`
+	_, err := loadRemoteConfig(t, "adapter: {name: test}\n", task)
+	require.NoError(t, err)
+}
+
+func TestTaskSchemaDirectConstruction(t *testing.T) {
+	for _, tc := range []struct {
+		name, schema, want string
+		resource           Resource
+	}{
+		{"unsupported", "2.1", "schema_version \"2.1\" is unsupported", Resource{}},
+		{
+			"missing named", "", "resources[0].transport: schema_version is required",
+			Resource{Transport: NamedTransport("remote")},
+		},
+		{
+			"v2 legacy", "2.0", "resources[0].transport: this is a v1 configuration shape",
+			Resource{Transport: &ResourceTransport{Legacy: true}},
+		},
+		{
+			"v2 nested", "2.0", "resources[0].nested_discoveries: this is a v1 configuration shape",
+			Resource{NestedDiscoveries: []NestedDiscovery{{}}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.ErrorContains(t, ValidateResourceTransports(&Config{
+				SchemaVersion: tc.schema, Resources: []Resource{tc.resource},
+			}), tc.want)
+		})
+	}
+}
