@@ -281,8 +281,8 @@ github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8
 github.com/opencontainers/go-digest v1.0.0/go.mod h1:0JzlMkj0TRzQZfJkVvzbP0HBR3IKzErnv2BNG4W4MAM=
 github.com/opencontainers/image-spec v1.1.1 h1:y0fUlFfIZhPF1W537XOLg0/fcx6zcHCJwooC2xJA040=
 github.com/opencontainers/image-spec v1.1.1/go.mod h1:qpqAh3Dmcf36wStyyWU+kCeDgrGnAve2nCC8+7h8Q0M=
-github.com/openshift-hyperfleet/hyperfleet-applier v0.0.0-20260827133207-94b7a4d56697 h1:9DFSlPuXlMY4zshztT4/MEnY6QAgu0WoVY1KFtVE9fg=
-github.com/openshift-hyperfleet/hyperfleet-applier v0.0.0-20260827133207-94b7a4d56697/go.mod h1:tDZnkLwpVO5ksfPm3NH9dy5Yl0ZBSfbtOA3hj2wrmHc=
+github.com/openshift-hyperfleet/hyperfleet-applier v0.1.0-rc1.0.20261003001809-f2ef5c6d7af3 h1:yTr4XDOKncThILqWrNp0IeSdIgGbS/1jxq11mkqA1Jw=
+github.com/openshift-hyperfleet/hyperfleet-applier v0.1.0-rc1.0.20261003001809-f2ef5c6d7af3/go.mod h1:3Ga3xahRZ5LLnRbFl4/9QCfqYQ29EnVUK52RBmTdJnA=
 github.com/openshift-hyperfleet/hyperfleet-broker v1.1.2-0.20260805201321-4ebbef72d0d2 h1:c5qyV3DjaBOMaxa/Aq2Ch3i4fh3kAXh2bo4z+EJq+Fs=
 github.com/openshift-hyperfleet/hyperfleet-broker v1.1.2-0.20260805201321-4ebbef72d0d2/go.mod h1:KKePw5NRbxNxdUK9KL4Cnhi9YI9TnKJUEkdaggyDRA4=
 github.com/openshift-hyperfleet/hyperfleet-logger v0.0.0-20260811173525-c9f9e282d029 h1:c3GdD3EUdR9lRjNot+aBIxVbAXbOSTtiQpWVTHnFHaU=
@@ -528,8 +528,8 @@ honnef.co/go/tools v0.0.0-20190102054323-c2f93a96b099/go.mod h1:rf3lG4BRIbNafJWh
 honnef.co/go/tools v0.0.0-20190523083050-ea95bdfd59fc/go.mod h1:rf3lG4BRIbNafJWhAfAdb/ePZxsR/4RtNHQocxwk9r4=
 k8s.io/api v0.37.1 h1:l6N77U7tjwB5L056bgrBTJIEdevac/naBZ3iSvDNfpM=
 k8s.io/api v0.37.1/go.mod h1:zSlbB1YpJ1YQlFVQy20UYll81UJSJJUMLhkhvg6Z78M=
-k8s.io/apiextensions-apiserver v0.37.0 h1:zRMQ3+/LIE5oZ0tVvXwYHC+dIkSP5cjNWju7AZU1LOI=
-k8s.io/apiextensions-apiserver v0.37.0/go.mod h1:HU0PfSBwchHL5iDau6jjt9zU6ryWkDDlaVUiq91NK80=
+k8s.io/apiextensions-apiserver v0.37.1 h1:7fIQG8eThDSTVYBWg/DOpI8v5wYfKCo0N8/TDMjj+zY=
+k8s.io/apiextensions-apiserver v0.37.1/go.mod h1:1Q3ujWwHgnhBoGsdmGORflwK1sDFmuaqH1OsMDWk2Gs=
 k8s.io/apimachinery v0.37.1 h1:hGCYyvKHCwtwMitj2vU4vYx0Z16N9GyZk9BBnz0wDAE=
 k8s.io/apimachinery v0.37.1/go.mod h1:jF84AyUi/IRIXRot5f+lm6MpxoWI+F1XgjaMmwCdTFw=
 k8s.io/client-go v0.37.1 h1:QTv/5ha4jAHtW9qxxVBkQVFBRDb4jHfFopQqqMdc+wM=
