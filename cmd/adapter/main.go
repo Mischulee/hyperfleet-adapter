@@ -352,7 +352,7 @@ func buildExecutor(
 func metricsConfigForAdapter(component, version, commit string) (health.MetricsConfig, error) {
 	adapterName := metrics.ExtractAdapterName(strings.TrimSpace(component))
 	if strings.TrimSpace(adapterName) == "" {
-		return health.MetricsConfig{}, fmt.Errorf("adapter name %q produces an empty metrics identity", component)
+		return health.MetricsConfig{}, fmt.Errorf("adapter.name %q produces an empty metrics identity", component)
 	}
 	return health.MetricsConfig{
 		Component:   component,

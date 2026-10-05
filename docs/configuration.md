@@ -73,7 +73,7 @@ transports:
 
 ### Top-level fields
 
-- `adapter.name` (string, required): Adapter name.
+- `adapter.name` (string, required): Adapter name. The `adapter_name` metrics label is derived by trimming whitespace and removing a recognized `hyperfleet-adapter-` or `adapter-` prefix, or `-adapter` suffix. Startup fails if the derived value is empty; the error includes the configured adapter name.
 - `adapter.version` (string, optional): when set, the binary validates it matches the running version. Only major and minor versions are compared — patch differences are allowed (e.g., config `1.2.0` with binary `1.2.3` is valid). Non-semver versions (e.g., `dev`, `latest`, custom tags) skip validation gracefully.
 - `debug_config` (bool, optional): Log the merged config after load. Default: `false`.
 

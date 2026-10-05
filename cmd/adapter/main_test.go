@@ -72,6 +72,7 @@ func TestMetricsConfigForAdapter(t *testing.T) {
 		t.Run(tt.component, func(t *testing.T) {
 			got, err := metricsConfigForAdapter(tt.component, tt.version, tt.commit)
 			if tt.wantError {
+				require.ErrorContains(t, err, "adapter.name")
 				require.ErrorContains(t, err, tt.component)
 				require.ErrorContains(t, err, "produces an empty metrics identity")
 				return
