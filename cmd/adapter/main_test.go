@@ -55,6 +55,14 @@ func TestMetricsConfigForAdapter(t *testing.T) {
 				Component: "test-adapter", Version: "v1.2.3", Commit: "abc123", AdapterName: "test",
 			},
 		},
+		{
+			component: "validation-adapter ",
+			version:   "v1.2.3",
+			commit:    "abc123",
+			want: health.MetricsConfig{
+				Component: "validation-adapter ", Version: "v1.2.3", Commit: "abc123", AdapterName: "validation",
+			},
+		},
 		{component: "adapter-", wantError: true},
 		{component: "hyperfleet-adapter-", wantError: true},
 		{component: "adapter- ", wantError: true},
