@@ -349,12 +349,17 @@ func buildExecutor(
 		Build()
 }
 
-func adapterNameForMetrics(component string) (string, error) {
+func metricsConfigForAdapter(component, version, commit string) (health.MetricsConfig, error) {
 	adapterName := metrics.ExtractAdapterName(component)
 	if strings.TrimSpace(adapterName) == "" {
-		return "", fmt.Errorf("adapter name %q produces an empty metrics identity", component)
+		return health.MetricsConfig{}, fmt.Errorf("adapter name %q produces an empty metrics identity", component)
 	}
-	return adapterName, nil
+	return health.MetricsConfig{
+		Component:   component,
+		Version:     version,
+		Commit:      commit,
+		AdapterName: adapterName,
+	}, nil
 }
 
 // -----------------------------------------------------------------------------
@@ -380,7 +385,7 @@ func runServe(flags *pflag.FlagSet) error {
 	if err != nil {
 		return err
 	}
-	adapterName, err := adapterNameForMetrics(config.Adapter.Name)
+	metricsConfig, err := metricsConfigForAdapter(config.Adapter.Name, version.Version, version.Commit)
 	if err != nil {
 		return err
 	}
@@ -465,12 +470,7 @@ func runServe(flags *pflag.FlagSet) error {
 	}()
 
 	// Start metrics server
-	metricsServer := health.NewMetricsServer(MetricsServerPort, health.MetricsConfig{
-		Component:   config.Adapter.Name,
-		Version:     version.Version,
-		Commit:      version.Commit,
-		AdapterName: adapterName,
-	})
+	metricsServer := health.NewMetricsServer(MetricsServerPort, metricsConfig)
 	err = metricsServer.Start(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to start metrics server", "error", err)
@@ -485,7 +485,7 @@ func runServe(flags *pflag.FlagSet) error {
 	}()
 
 	// Create adapter metrics recorder
-	metricsRecorder := metrics.NewRecorder(config.Adapter.Name, version.Version, adapterName, nil)
+	metricsRecorder := metrics.NewRecorder(config.Adapter.Name, version.Version, metricsConfig.AdapterName, nil)
 
 	// Create real clients
 	slog.InfoContext(ctx, "creating hyperfleet api client...")

@@ -13,6 +13,7 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/executor"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/transportregistry"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/constants"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/health"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,13 +39,22 @@ func TestLoadConfigRejectsTaskSchemaBeforeRuntimeSetup(t *testing.T) {
 	require.ErrorContains(t, err, "schema_version must be a string")
 }
 
-func TestAdapterNameForMetrics(t *testing.T) {
+func TestMetricsConfigForAdapter(t *testing.T) {
 	tests := []struct {
 		component string
-		want      string
+		version   string
+		commit    string
+		want      health.MetricsConfig
 		wantError bool
 	}{
-		{component: "test-adapter", want: "test"},
+		{
+			component: "test-adapter",
+			version:   "v1.2.3",
+			commit:    "abc123",
+			want: health.MetricsConfig{
+				Component: "test-adapter", Version: "v1.2.3", Commit: "abc123", AdapterName: "test",
+			},
+		},
 		{component: "adapter-", wantError: true},
 		{component: "hyperfleet-adapter-", wantError: true},
 		{component: "adapter- ", wantError: true},
@@ -52,7 +62,7 @@ func TestAdapterNameForMetrics(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.component, func(t *testing.T) {
-			got, err := adapterNameForMetrics(tt.component)
+			got, err := metricsConfigForAdapter(tt.component, tt.version, tt.commit)
 			if tt.wantError {
 				require.ErrorContains(t, err, tt.component)
 				require.ErrorContains(t, err, "produces an empty metrics identity")
